@@ -5,10 +5,6 @@ from PIL import Image
 import time
 
 from quaternion_utils import generate_rotation_quaternion
-from wilor.models import load_wilor
-from wilor.utils import recursive_to
-from wilor.datasets.vitdet_dataset import ViTDetDataset
-from ultralytics import YOLO
 import viser
 import yourdfpy
 from viser.extras import ViserUrdf

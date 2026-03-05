@@ -4,7 +4,7 @@ import numpy as np
 from PIL import Image
 import time
 
-from quaternion_utils import generate_rotation_quaternion
+from quaternion_utils_2 import generate_rotation_quaternion
 from wilor.models import load_wilor
 from wilor.utils import recursive_to
 from wilor.datasets.vitdet_dataset import ViTDetDataset
@@ -47,10 +47,10 @@ def get_wilor_hands():
 
     # Load models
     model, model_cfg = load_wilor(
-        checkpoint_path='./pretrained_models/wilor_final.ckpt',
-        cfg_path='./pretrained_models/model_config.yaml'
+        checkpoint_path='../pretrained_models/wilor_final.ckpt',
+        cfg_path='../pretrained_models/model_config.yaml'
     )
-    detector = YOLO('./pretrained_models/detector.pt')
+    detector = YOLO('../pretrained_models/detector.pt')
 
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     model = model.to(device)

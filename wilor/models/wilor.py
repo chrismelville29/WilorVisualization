@@ -4,7 +4,7 @@ from typing import Any, Dict, Mapping, Tuple
 
 from yacs.config import CfgNode
 
-from ..utils import SkeletonRenderer, MeshRenderer
+#from ..utils import SkeletonRenderer, MeshRenderer
 from ..utils.geometry import aa_to_rotmat, perspective_projection
 from ..utils.pylogger import get_pylogger
 from .backbones import create_backbone
@@ -17,7 +17,7 @@ log = get_pylogger(__name__)
 
 class WiLoR(pl.LightningModule):
 
-    def __init__(self, cfg: CfgNode, init_renderer: bool = True):
+    def __init__(self, cfg: CfgNode, init_renderer: bool = False):
         """
         Setup WiLoR model
         Args:
@@ -55,8 +55,9 @@ class WiLoR(pl.LightningModule):
         self.register_buffer('initialized', torch.tensor(False))
         # Setup renderer for visualization
         if init_renderer:
-            self.renderer = SkeletonRenderer(self.cfg)
-            self.mesh_renderer = MeshRenderer(self.cfg, faces=self.mano.faces)
+            pass
+            #self.renderer = SkeletonRenderer(self.cfg)
+            #self.mesh_renderer = MeshRenderer(self.cfg, faces=self.mano.faces)
         else:
             self.renderer = None
             self.mesh_renderer = None
@@ -156,6 +157,10 @@ class WiLoR(pl.LightningModule):
                                                    translation=pred_cam_t,
                                                    focal_length=focal_length / self.cfg.MODEL.IMAGE_SIZE)
         output['pred_keypoints_2d'] = pred_keypoints_2d.reshape(batch_size, -1, 2)
+        pred_vertices_2d = perspective_projection(pred_vertices,
+                                                   translation=pred_cam_t,
+                                                   focal_length=focal_length / self.cfg.MODEL.IMAGE_SIZE)
+        output['pred_vertices_2d'] = pred_keypoints_2d.reshape(batch_size, -1, 2)
         
         return output
 
