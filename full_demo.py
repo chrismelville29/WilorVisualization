@@ -4,7 +4,7 @@ import numpy as np
 from PIL import Image
 import time
 
-from quaternion_utils_2 import generate_rotation_quaternion
+from quaternion_utils import generate_rotation_quaternion
 from wilor.models import load_wilor
 from wilor.utils import recursive_to
 from wilor.datasets.vitdet_dataset import ViTDetDataset
@@ -189,6 +189,10 @@ def correct_hand_depths(meshes_depthified, skeletons_3d, meshes):
         cloud_skeleton = meshes_depthified[i]
         skeleton_3d = skeletons_3d[i]
         mesh = meshes[i]
+
+        print(cloud_skeleton.shape)
+        print(skeleton_3d.shape)
+        print(mesh.shape)
 
         cloud_norms = np.linalg.norm(cloud_skeleton, axis=1)
         mesh_norms = np.linalg.norm(mesh, axis=1)

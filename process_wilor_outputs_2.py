@@ -28,7 +28,7 @@ initial_lateral = np.array((-1.0, 0, 0))
 
 
 npz_path = '../hand_npzs/'
-frame_no = '000410'
+frame_no = '000000'
 img_path = 'frame_'+frame_no+'.png'
 
 def correct_hand_depths(meshes_depthified, skeletons_3d, meshes):

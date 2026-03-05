@@ -160,7 +160,7 @@ class WiLoR(pl.LightningModule):
         pred_vertices_2d = perspective_projection(pred_vertices,
                                                    translation=pred_cam_t,
                                                    focal_length=focal_length / self.cfg.MODEL.IMAGE_SIZE)
-        output['pred_vertices_2d'] = pred_keypoints_2d.reshape(batch_size, -1, 2)
+        output['pred_vertices_2d'] = pred_vertices_2d.reshape(batch_size, -1, 2)
         
         return output
 
