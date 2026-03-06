@@ -11,6 +11,30 @@ fy *= 0.1333333333
 cx *= 0.1333333333
 cy *= 0.1333333333
 
+def cloudify_frame(cloud_handle, frame_no):
+    depth_img = Image.open(f'../depth_data/depth/{frame_no}.png')
+    color_img = Image.open(f'../frames/frame_{frame_no}.png')
+
+    depth = np.asarray(depth_img) / 1000
+    colors = np.asarray(color_img).reshape(-1, 3)
+
+    H, W = depth.shape
+    v, u = np.meshgrid(
+        np.arange(H),
+        np.arange(W),
+        indexing="ij"
+    )
+
+    Z = depth.flatten()
+    X = (u.flatten() - cx) * Z / fx
+    Y = (v.flatten() - cy) * Z / fy
+    points = np.stack([X, Y, Z], axis=1)
+
+    cloud_handle.points = points
+    cloud_handle.colors = colors
+
+
+
 def cloudify_video(server, num_frames, fps=24):
     dt = 1.0 / fps
 
@@ -25,34 +49,15 @@ def cloudify_video(server, num_frames, fps=24):
         t0 = time.time()
 
         frame_no = str(i).zfill(6)
-        depth_img = Image.open(f'../depth_data/depth/{frame_no}.png')
-        color_img = Image.open(f'../frames/frame_{frame_no}.png')
 
-        depth = np.asarray(depth_img) / 1000
-        colors = np.asarray(color_img).reshape(-1, 3)
+        cloudify_frame(cloud_handle, frame_no)
 
-        H, W = depth.shape
-        v, u = np.meshgrid(
-            np.arange(H),
-            np.arange(W),
-            indexing="ij"
-        )
-
-        Z = depth.flatten()
-        X = (u.flatten() - cx) * Z / fx
-        Y = (v.flatten() - cy) * Z / fy
-        points = np.stack([X, Y, Z], axis=1)
-
-        # Update in-place
-        cloud_handle.points = points
-        cloud_handle.colors = colors
-
-        # Frame pacing
         elapsed = time.time() - t0
         sleep_time = max(0.0, dt - elapsed)
         time.sleep(sleep_time)
 
 server = viser.ViserServer()
+
 cloudify_video(server, 600)
 
 print("check out http://localhost:8080")
