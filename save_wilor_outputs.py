@@ -22,7 +22,7 @@ cx *= 0.1333333333
 cy *= 0.1333333333
 
 
-npz_path = '../hand_npzs/'
+npz_path = '../handed_npzs/'
 
 def load_model():
     # Load models
@@ -75,6 +75,7 @@ def save_wilor_hands(model, model_cfg, detector, device, faces, frame_no):
     meshes_2d = []
     skeletons_3d = []
     skeletons_2d = []
+    handednesses = []
 
 
     for batch in dataloader:
@@ -139,11 +140,12 @@ def save_wilor_hands(model, model_cfg, detector, device, faces, frame_no):
             meshes_2d.append(verts_2d_cam)
             skeletons_2d.append(kpts_2d_cam)
             skeletons_3d.append(kpts_3d_cam)
+            handednesses.append(is_right)
 
 
 
 
-    np.savez(npz_path + "frame_"+frame_no+'.npz', meshes_2d=meshes_2d, meshes_3d=meshes_3d, skeletons_2d=skeletons_2d, skeletons_3d=skeletons_3d, faces=faces)
+    np.savez(npz_path + "frame_"+frame_no+'.npz', meshes_2d=meshes_2d, meshes_3d=meshes_3d, skeletons_2d=skeletons_2d, skeletons_3d=skeletons_3d, faces=faces, handednesses=handednesses)
 
     print("done with big method")
 
@@ -181,7 +183,7 @@ def cam_crop_to_full(cam_bbox, box_center, box_size, img_size, focal_length=5000
 model, model_cfg, detector, device, faces = load_model()
 
 
-for i in range(2):
+for i in range(400, 405):
     frame_no = str(i).zfill(6)
     save_wilor_hands(model, model_cfg, detector, device, faces, frame_no)
 

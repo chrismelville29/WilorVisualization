@@ -3,7 +3,8 @@ from PIL import Image
 import time
 
 from quaternion_utils import generate_rotation_quaternion
-from cluster_hand import find_transformation, apply_transformation, get_cluster_rosters, get_cluster_median_sets, pointify_median_idx_sets
+#from cluster_hand import find_transformation
+from cluster_hand import find_transformation, apply_transformation, get_cluster_rosters, get_cluster_median_sets, pointify_median_idx_sets, boring_transform
 import viser
 import yourdfpy
 from viser.extras import ViserUrdf
@@ -23,6 +24,7 @@ COLOR_2D = (250, 250, 150) #yellow
 COLOR_3D = np.array((250, 150, 250)) #pink
 COLOR_CORRECTED = (150, 250, 250) #teal
 COLOR_GRIPPER = (40, 40, 40)
+COLOR_TRANSFORMED = (150, 150, 250) 
 
 CLUSTER_PATH = "cluster_labels.npy"
 N_CLUSTERS = 24
@@ -40,6 +42,7 @@ initial_lateral = np.array((-1.0, 0, 0))
 
 
 npz_path = '../hand_npzs/'
+
 
 
 def get_ratios(meshes_depthified, meshes):
@@ -93,8 +96,8 @@ def depthify_2d_hands(depth, hands_2d):
         hand_2d = hands_2d[i]
 
         uv = np.floor(hand_2d).astype(int)
-        u = np.clip(uv[:, 0], a_min=0, a_max=DEPTHIMG_HEIGHT-1)
-        v = np.clip(uv[:, 1], a_min=0, a_max=DEPTHIMG_WIDTH-1)
+        u = np.clip(uv[:, 0], a_min=0, a_max=DEPTHIMG_WIDTH-1)
+        v = np.clip(uv[:, 1], a_min=0, a_max=DEPTHIMG_HEIGHT-1)
 
         # Gather depths in one shot
         Z = depth[v, u]
@@ -134,8 +137,6 @@ def gripperify_skeletons(skeletons_3d):
 
         finger_graspnesses = np.linalg.norm(fingertips - thumbtip, axis=1)
 
-        #print("graspnesses")
-        #print(finger_graspnesses)
         min_graspness = np.min(finger_graspnesses)
 
 
@@ -273,6 +274,8 @@ left_corrected_handle = initialize_mesh(server, "left hand corrected", COLOR_COR
 right_corrected_handle = initialize_mesh(server, "right hand corrected", COLOR_CORRECTED)
 corrected_handles = [left_corrected_handle, right_corrected_handle]
 
+transformed_handle = initialize_mesh(server, "transform mesh", COLOR_TRANSFORMED)
+
 left_original_handle = initialize_mesh(server, "left hand original", COLOR_3D)
 right_original_handle = initialize_mesh(server, "right hand original", COLOR_3D)
 original_handles = [left_original_handle, right_original_handle]
@@ -315,6 +318,8 @@ for i in range(start_frame, end_frame):
     transform = find_transformation(median_idx_sets[0], meshes_3d[0], meshes_depthified[0])
     transformed_mesh = apply_transformation(meshes_3d[0], transform)
 
+    boring_mesh = boring_transform(meshes_3d[0], hand_ratios[0], median_idx_sets[0])
+
     corrected_skeletons, corrected_meshes = correct_hand_depths(meshes_depthified, skeletons_3d, meshes_3d)
     #corrected hands
     gripper_bases, gripper_directions, grasp_directions, graspnesses = gripperify_skeletons(corrected_skeletons)
@@ -325,6 +330,9 @@ for i in range(start_frame, end_frame):
     render_cloud(point_cloud_handle, points, colors, hands_centroid)
 
     #render_clouds(medians_handles, median_point_sets, COLOR_3D, hands_centroid)
+
+    render_meshes([transformed_handle], [transformed_mesh], faces, hands_centroid)
+    render_meshes([transformed_handle], [boring_mesh], faces, hands_centroid)
 
     #render_meshes(corrected_handles, corrected_meshes, faces, hands_centroid)
     render_meshes(original_handles, meshes_3d, faces, hands_centroid)

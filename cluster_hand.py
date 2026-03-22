@@ -5,11 +5,11 @@ import time
 import viser
 import sklearn
 
-#from sklearn.cluster import KMeans
-
 CLUSTER_PATH = "cluster_labels.npy"
 N_CLUSTERS = 24
 REFERENCE_VERTICES = 300
+
+npzs_path = '../handed_npzs/'
 
 #intrinsics
 fx, fy, cx, cy = 1366.3287, 1366.3287, 957.5452, 722.60974
@@ -19,6 +19,9 @@ fy *= 0.1333333333
 cx *= 0.1333333333
 cy *= 0.1333333333
 
+DEPTHIMG_HEIGHT = 192
+DEPTHIMG_WIDTH = 256
+
 def get_cluster_rosters():
     labels = np.load(CLUSTER_PATH)
     clusters = []
@@ -27,7 +30,7 @@ def get_cluster_rosters():
 
     for i in range(len(labels)):
         clusters[labels[i]].append(i)
-
+ 
     for i in range(N_CLUSTERS):
         clusters[i] = np.array(clusters[i])
     
@@ -42,9 +45,9 @@ def depthify_2d_hands(depth, hands_2d):
         
         hand_2d = hands_2d[i]
 
-        uv = np.floor(hand_2d).astype(int)
-        u = uv[:, 0]
-        v = uv[:, 1]
+        uv = np.round(hand_2d).astype(int)
+        u = np.clip(uv[:, 0], a_min=0, a_max=DEPTHIMG_WIDTH-1)
+        v = np.clip(uv[:, 1], a_min=0, a_max=DEPTHIMG_HEIGHT-1)
 
         # Gather depths in one shot
         Z = depth[v, u]
@@ -79,7 +82,7 @@ def get_cluster_median_sets(clusters, ratiis):
         medians = np.array(medians)
 
         # sort medians by their ratio values
-        medians = medians[np.argsort(ratii[medians])][2:5]
+        medians = medians[np.argsort(ratii[medians])][3:6]
 
         median_sets.append(medians)
     return median_sets
@@ -145,12 +148,11 @@ def apply_transformation(points, transform):
     # convert back to (N, 3)
     return transformed_h[:, :3]
 
+
 def boring_transform(points, ratios, idx_set):
-    print(ratios)
-    print(idx_set)
-    print(ratios[idx_set])
     scale_factor = np.median(ratios[idx_set])
-    return scale_factor * points
+    return points / scale_factor
+    
 
 
 
@@ -194,127 +196,146 @@ def get_point_cloud(frame_no):
     return points, depth, colors
 
 
-frame_no = '000545'
+if __name__ == "__main__":
+        
+    frame_no = '000401'
 
-wilor_data = np.load('../hand_npzs/frame_' + frame_no + '.npz')
-meshes_3d, meshes_2d, skeletons_2d, skeletons_3d, faces = wilor_data['meshes_3d'], wilor_data['meshes_2d'], wilor_data['skeletons_2d'], wilor_data['skeletons_3d'], wilor_data['faces']
-
-mesh = meshes_3d[0]
-
-REFERENCE_VERTICES = 300
-
-mesh = mesh[:REFERENCE_VERTICES]
+    wilor_data = np.load(npzs_path + 'frame_' + frame_no + '.npz')
+    meshes_3d, meshes_2d, skeletons_2d, skeletons_3d, faces, handednesses = wilor_data['meshes_3d'], wilor_data['meshes_2d'], wilor_data['skeletons_2d'], wilor_data['skeletons_3d'], wilor_data['faces'], wilor_data['handednesses']
 
 
-kmeans = sklearn.cluster.KMeans(n_clusters=N_CLUSTERS, init='k-means++', n_init=3, random_state=0)
-kmeans.fit(mesh)
-labels = kmeans.labels_
+    print(handednesses.shape)
+
+    mesh = meshes_3d[0]
+
+    REFERENCE_VERTICES = 300
+
+    mesh = mesh[:REFERENCE_VERTICES]
 
 
-np.save("cluster_labels.npy", labels)
-
-labels = np.load("cluster_labels.npy")
-
-server = viser.ViserServer()
-
-points, depth, colors = get_point_cloud(frame_no)
+    kmeans = sklearn.cluster.KMeans(n_clusters=N_CLUSTERS, init='k-means++', n_init=3, random_state=0)
+    kmeans.fit(mesh)
+    labels = kmeans.labels_
 
 
+    np.save("cluster_labels.npy", labels)
 
-cluster_rosters = get_cluster_rosters()
+    labels = np.load("cluster_labels.npy")
 
-meshes_depthified = depthify_2d_hands(depth, meshes_2d)
+    server = viser.ViserServer()
 
-hand_ratios = get_ratios(meshes_depthified, meshes_3d)
-
-ratios = hand_ratios[0]
-
-median_idx_sets = get_cluster_median_sets(cluster_rosters, hand_ratios)
-median_point_sets = pointify_median_idx_sets(median_idx_sets, meshes_depthified)
-
-transform = find_transformation(median_idx_sets[0], meshes_3d[0], meshes_depthified[0])
-transformed_mesh = apply_transformation(meshes_3d[0], transform)
-
-boring_mesh = boring_transform(meshes_3d[0], ratios, median_idx_sets[0])
-
-centroid = np.mean(mesh, axis=0)
-meshes_3d -= centroid
-points -= centroid
-transformed_mesh -= centroid
-median_point_sets -= centroid
-boring_mesh -= centroid
+    points, depth, colors = get_point_cloud(frame_no)
 
 
 
+    cluster_rosters = get_cluster_rosters()
+
+    meshes_depthified = depthify_2d_hands(depth, meshes_2d)
+
+    hand_ratios = get_ratios(meshes_depthified, meshes_3d)
+
+    ratios = hand_ratios[0]
+
+    median_idx_sets = get_cluster_median_sets(cluster_rosters, hand_ratios)
+    median_point_sets_depthified = pointify_median_idx_sets(median_idx_sets, meshes_depthified)
+    median_point_sets_3d = pointify_median_idx_sets(median_idx_sets, meshes_3d)
+
+    transform = find_transformation(median_idx_sets[0], meshes_3d[0], meshes_depthified[0])
+    transformed_mesh = apply_transformation(meshes_3d[0], transform)
+
+    boring_mesh = boring_transform(meshes_3d[0], ratios, median_idx_sets[0])
+
+    centroid = np.mean(mesh, axis=0)
+    #centroid = np.zeros(3)
+    meshes_3d -= centroid
+    points -= centroid
+    transformed_mesh -= centroid
+    median_point_sets_depthified -= centroid
+    median_point_sets_3d -= centroid
+    boring_mesh -= centroid
 
 
-print(transform)
-
-
-print(transformed_mesh)
 
 
 
-
-server.scene.add_point_cloud(
-        name="point_cloud",
-        points=points,
-        colors=colors,
-        point_size=0.001,
-    )
-
-ratio_colors = np.zeros((REFERENCE_VERTICES, 3))
-for i in range(REFERENCE_VERTICES):
-    ratio_colors[i] = np.array(((ratios[i] - 0.6) * 1.5, 0, 0))
-
-server.scene.add_point_cloud(
-    name="ratios",
-    points=mesh,
-    colors=ratio_colors,
-    point_size=0.01
-)
-
-server.scene.add_mesh_simple(
-        name="mesh",
-        vertices=meshes_3d[0],
-        faces=faces,
-        color=(250, 0, 0)
-    )
-
-server.scene.add_mesh_simple(
-    name="transformed mesh",
-    vertices = transformed_mesh,
-    faces=faces,
-    color=(0,0,1)
-)
-
-server.scene.add_mesh_simple(
-    name="boring mesh",
-    vertices=boring_mesh,
-    faces=faces,
-    color=(0, 100, 0)
-)
+    #print(transform)
 
 
-cluster_colors = np.zeros((REFERENCE_VERTICES, 3))
-for i in range(REFERENCE_VERTICES):
-    label = labels[i]
-    cluster_colors[i] = np.array((label // 4 / 6, label % 3 / 2, label % 2))
+    #print(transformed_mesh)
 
 
-server.scene.add_point_cloud(
-        name="clusters",
-        points=mesh,
-        colors=cluster_colors,
-        point_size=0.01,
-    )
 
-for i in range(len(median_point_sets)):
+
     server.scene.add_point_cloud(
-        name=f"medians_{i}",
-        points = median_point_sets[i],
-        colors=np.array((0, 0, 250)),
-        point_size=0.01)
+            name="point_cloud",
+            points=points,
+            colors=colors,
+            point_size=0.001,
+        )
 
-while True:
-    time.sleep(1)
+    ratio_colors = np.zeros((REFERENCE_VERTICES, 3))
+    for i in range(REFERENCE_VERTICES):
+        ratio_colors[i] = np.array(((ratios[i] - 0.6) * 1.5, 0, 0))
+
+    '''
+    server.scene.add_point_cloud(
+        name="ratios",
+        points=mesh,
+        colors=ratio_colors,
+        point_size=0.01
+    )
+    '''
+
+    server.scene.add_mesh_simple(
+            name="mesh",
+            vertices=meshes_3d[0],
+            faces=faces,
+            color=(250, 0, 0)
+        )
+
+    server.scene.add_mesh_simple(
+        name="transformed mesh",
+        vertices = transformed_mesh,
+        faces=faces,
+        color=(0,0,1)
+    )
+
+
+    server.scene.add_mesh_simple(
+        name="boring mesh",
+        vertices=boring_mesh,
+        faces=faces,
+        color=(0, 100, 0)
+    )
+
+
+
+    cluster_colors = np.zeros((REFERENCE_VERTICES, 3))
+    for i in range(REFERENCE_VERTICES):
+        label = labels[i]
+        cluster_colors[i] = np.array((label // 4 / 6, label % 3 / 2, label % 2))
+
+
+    server.scene.add_point_cloud(
+            name="clusters",
+            points=mesh,
+            colors=cluster_colors,
+            point_size=0.01,
+        )
+
+    for i in range(len(median_point_sets_depthified)):
+        server.scene.add_point_cloud(
+            name=f"depthified medians_{i}",
+            points = median_point_sets_depthified[i],
+            colors=np.array((0, 0, 250)),
+            point_size=0.01)
+
+    for i in range(len(median_point_sets_3d)):
+        server.scene.add_point_cloud(
+            name=f"wilor medians_{i}",
+            points = median_point_sets_3d[i],
+            colors=np.array((0, 250, 0)),
+            point_size=0.01)
+
+    while True:
+        time.sleep(1)
