@@ -3,6 +3,7 @@ from PIL import Image
 import time
 
 from quaternion_utils import generate_rotation_quaternion
+from cluster_hand import find_transformation, apply_transformation, get_cluster_rosters, get_cluster_median_sets, pointify_median_idx_sets
 import viser
 import yourdfpy
 from viser.extras import ViserUrdf
@@ -19,9 +20,13 @@ DEPTHIMG_HEIGHT = 192
 DEPTHIMG_WIDTH = 256
 
 COLOR_2D = (250, 250, 150) #yellow
-COLOR_3D = (250, 150, 250) #pink
+COLOR_3D = np.array((250, 150, 250)) #pink
 COLOR_CORRECTED = (150, 250, 250) #teal
 COLOR_GRIPPER = (40, 40, 40)
+
+CLUSTER_PATH = "cluster_labels.npy"
+N_CLUSTERS = 24
+REFERENCE_VERTICES = 300
 
 URDF_PATH = "../gripper_model/robots/robotiq_arg85_description.URDF" 
 urdf = yourdfpy.URDF.load(
@@ -35,8 +40,27 @@ initial_lateral = np.array((-1.0, 0, 0))
 
 
 npz_path = '../hand_npzs/'
-frame_no = '000450'
-img_path = 'frame_'+frame_no+'.png'
+
+
+def get_ratios(meshes_depthified, meshes):
+
+    hand_ratios = []
+    for i in range(len(meshes_depthified)):
+        cloud_skeleton = meshes_depthified[i]
+        mesh = meshes[i]
+
+        cloud_norms = np.linalg.norm(cloud_skeleton, axis=1)
+        mesh_norms = np.linalg.norm(mesh, axis=1)
+
+        ratios = (mesh_norms / cloud_norms)[:REFERENCE_VERTICES]
+
+        hand_ratios.append(ratios)
+    return hand_ratios
+
+
+    
+
+
 
 def correct_hand_depths(meshes_depthified, skeletons_3d, meshes):
 
@@ -124,8 +148,9 @@ def gripperify_skeletons(skeletons_3d):
 
 
 def get_point_cloud(frame_no):
-    depth_img = Image.open('../depth_data/depth/'+frame_no+".png")
-    color_img = Image.open('../frames/frame_'+frame_no+".png")
+    depth_frame_no = frame_no
+    depth_img = Image.open('../depth_data/depth/'+str(depth_frame_no).zfill(6)+".png")
+    color_img = Image.open('../frames/frame_'+str(frame_no).zfill(6)+".png")
 
     depth = np.asarray(depth_img) / 1000
     colors = np.asarray(color_img).reshape(-1, 3)
@@ -149,7 +174,6 @@ def get_point_cloud(frame_no):
 def get_hands_centroid(meshes):
     all_vertices = np.concatenate(meshes, axis=0)
     return np.mean(all_vertices, axis=0)
-
 
 def render_meshes(handles, meshes, faces, centroid=None):
 
@@ -212,27 +236,9 @@ def initialize_gripper(server, name):
 
     return handle, gripper
 
-def render_dots(handle, points, centroid=None):
-
-    range_start = 30
-    range_end = 60
-
-    rendering_points = points.copy()
-    if centroid is not None:
-        rendering_points -= centroid
-
-    handle.points = rendering_points
-
-    colors = np.zeros((778, 3))
-    for i in range(778):
-        if i >= range_start and i < range_end:
-            colors[i] = np.array((1, 0, 0))
-        else:
-            colors[i] = np.array((0, 0, 0))
-
-    print(colors)
-
-    handle.colors = colors
+def render_clouds(handles, clouds, colors, centroid=None):
+    for i in range(len(clouds)):
+        render_cloud(handles[i], clouds[i], colors, centroid)
 
 def render_cloud(handle, points, colors, centroid=None):
     rendering_points = points.copy()
@@ -258,6 +264,11 @@ server = viser.ViserServer()
 
 point_cloud_handle = initialize_cloud(server, "point cloud", point_size=0.001)
 
+
+left_medians_handle = initialize_cloud(server, "left medians", point_size=0.01)
+right_medians_handle = initialize_cloud(server, "right medians", point_size=0.01)
+medians_handles = [left_medians_handle, right_medians_handle]
+
 left_corrected_handle = initialize_mesh(server, "left hand corrected", COLOR_CORRECTED)
 right_corrected_handle = initialize_mesh(server, "right hand corrected", COLOR_CORRECTED)
 corrected_handles = [left_corrected_handle, right_corrected_handle]
@@ -271,47 +282,51 @@ right_gripper_handle, right_urdf_handle = initialize_gripper(server, "/right gri
 gripper_frame_handles = [left_gripper_handle, right_gripper_handle]
 gripper_urdf_handles = [left_urdf_handle, right_urdf_handle]
 
-#corrected_hand_cloud_handle = initialize_cloud(server, "corrected hand cloud", point_size=0.01)
 
 
 
 
-
+cluster_rosters = get_cluster_rosters()
 hands_centroid = np.array((0.03,0.07,0.45))
 print("wahoo made it")
 fps = 12
 dt = 1.0 / fps
 
-start_frame = 200
-end_frame = 201
+start_frame = 0
+end_frame = 700
 
 for i in range(start_frame, end_frame):
     t0 = time.time()
 
     frame_no = str(i).zfill(6)
 
-    wilor_data = np.load('../hand_npzs/frame_' + frame_no + '.npz')
+    wilor_data = np.load('../hand_npzs/frame_' + str(i).zfill(6) + '.npz')
     meshes_3d, meshes_2d, skeletons_2d, skeletons_3d, faces = wilor_data['meshes_3d'], wilor_data['meshes_2d'], wilor_data['skeletons_2d'], wilor_data['skeletons_3d'], wilor_data['faces']
 
-    #hands_centroid = get_hands_centroid(meshes_3d)
-    #hands_centroid = None
-    #print(hands_centroid)
-    points, depth, colors = get_point_cloud(frame_no)
+    points, depth, colors = get_point_cloud(i)
     skeletons_depthified = depthify_2d_hands(depth, skeletons_2d)
     meshes_depthified = depthify_2d_hands(depth, meshes_2d)
+
+    hand_ratios = get_ratios(meshes_depthified, meshes_3d)
+
+    median_idx_sets = get_cluster_median_sets(cluster_rosters, hand_ratios)
+    median_point_sets = pointify_median_idx_sets(median_idx_sets, meshes_3d)
+
+    transform = find_transformation(median_idx_sets[0], meshes_3d[0], meshes_depthified[0])
+    transformed_mesh = apply_transformation(meshes_3d[0], transform)
 
     corrected_skeletons, corrected_meshes = correct_hand_depths(meshes_depthified, skeletons_3d, meshes_3d)
     #corrected hands
     gripper_bases, gripper_directions, grasp_directions, graspnesses = gripperify_skeletons(corrected_skeletons)
     #original hands
-    #gripper_bases, gripper_directions, grasp_directions, graspnesses = gripperify_skeletons(skeletons_3d)
+    gripper_bases, gripper_directions, grasp_directions, graspnesses = gripperify_skeletons(skeletons_3d)
 
 
     render_cloud(point_cloud_handle, points, colors, hands_centroid)
 
-    #render_dots(corrected_hand_cloud_handle, corrected_meshes[0], hands_centroid)
+    #render_clouds(medians_handles, median_point_sets, COLOR_3D, hands_centroid)
 
-    render_meshes(corrected_handles, corrected_meshes, faces, hands_centroid)
+    #render_meshes(corrected_handles, corrected_meshes, faces, hands_centroid)
     render_meshes(original_handles, meshes_3d, faces, hands_centroid)
 
     render_grippers(gripper_frame_handles, gripper_urdf_handles, gripper_bases, gripper_directions, grasp_directions, graspnesses, hands_centroid)
