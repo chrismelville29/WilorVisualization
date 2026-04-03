@@ -2,6 +2,8 @@ import numpy as np
 from PIL import Image
 import time
 
+import cluster_utils
+
 import viser
 import sklearn
 
@@ -22,19 +24,64 @@ cy *= 0.1333333333
 DEPTHIMG_HEIGHT = 192
 DEPTHIMG_WIDTH = 256
 
-def get_cluster_rosters():
-    labels = np.load(CLUSTER_PATH)
-    clusters = []
-    for i in range(N_CLUSTERS):
-        clusters.append([])
+def determine_hands(handednesses):
+    left_index, right_index = None, None
 
-    for i in range(len(labels)):
-        clusters[labels[i]].append(i)
- 
-    for i in range(N_CLUSTERS):
-        clusters[i] = np.array(clusters[i])
+    if len(handednesses) == 0:
+        print("no hands detected")
+    elif len(handednesses) > 2:
+        print("too many hands in frame")
+    elif len(handednesses) == 2 and handednesses[0] == handednesses[1]:
+        print("two of the same side hand")
+    elif len(handednesses) == 1:
+        if handednesses[0] == 0:
+            left_index = 0
+        else:
+            right_index = 0
+    elif len(handednesses) == 2:
+        if handednesses[0] == 0:
+            left_index = 0
+            right_index = 1
+        else:
+            left_index = 1
+            right_index = 0
+    return left_index, right_index
+
+def split_hands(wilor_data):
+    left_data, right_data = None, None
+
+    faces, handednesses = wilor_data['faces'], wilor_data['handednesses']
+
+
+    if len(handednesses) == 0:
+        print("no hands detected")
+        return left_data, right_data
+    if len(handednesses) > 2:
+        print("too many hands in frame")
+        return left_data, right_data
+    if len(handednesses) == 2 and handednesses[0] == handednesses[1]:
+        print("two of the same side hand")
+        return left_data, right_data
+
+    meshes_3d, meshes_2d = wilor_data['meshes_3d'], wilor_data['meshes_2d']
+    skeletons_2d, skeletons_3d =  wilor_data['skeletons_2d'], wilor_data['skeletons_3d']
+
+    if len(handednesses) == 1:
+        if handednesses[0] == 0:
+            left_data = meshes_3d[0], meshes_2d[0], skeletons_2d[0], skeletons_3d[0], faces
+        else:
+            right_data = meshes_3d[0], meshes_2d[0], skeletons_2d[0], skeletons_3d[0], faces
+    elif len(handednesses) == 2:
+        if handednesses[0] == 0:
+            left_data = meshes_3d[0], meshes_2d[0], skeletons_2d[0], skeletons_3d[0], faces
+            right_data = meshes_3d[1], meshes_2d[1], skeletons_2d[1], skeletons_3d[1], faces
+        else:
+            right_data = meshes_3d[0], meshes_2d[0], skeletons_2d[0], skeletons_3d[0], faces
+            left_data = meshes_3d[1], meshes_2d[1], skeletons_2d[1], skeletons_3d[1], faces
     
-    return clusters
+    return left_data, right_data
+
+
 
 def depthify_2d_hands(depth, hands_2d):
 
@@ -62,100 +109,6 @@ def depthify_2d_hands(depth, hands_2d):
 
     return hands_depthified
 
-def get_cluster_median_sets(clusters, ratiis):
-    median_sets = []
-    for ratii in ratiis:
-        medians = []
-
-        for cluster in clusters:
-            # ratios belonging to this cluster
-            cluster_ratios = ratii[cluster]
-
-            # index of median within the cluster
-            order = np.argsort(cluster_ratios)
-            median_local_idx = order[len(order) // 2]
-
-            # convert back to original ratio index
-            medians.append(cluster[median_local_idx])
-
-
-        medians = np.array(medians)
-
-        # sort medians by their ratio values
-        medians = medians[np.argsort(ratii[medians])][3:6]
-
-        median_sets.append(medians)
-    return median_sets
-
-def pointify_median_idx_sets(median_idx_sets, meshes_3d):
-    median_point_sets = []
-    for i in range(len(meshes_3d)):
-        median_idxs = median_idx_sets[i]
-        median_points = meshes_3d[i][median_idxs]
-        median_point_sets.append(median_points)
-    return median_point_sets
-
-def find_transformation(idx_set, meshes_3d, meshes_depthified):
-    corrs_3d = meshes_3d[idx_set]                 # source
-    corrs_depthified = meshes_depthified[idx_set] # target
-
-    # 1. Compute centroids
-    centroid_3d = np.mean(corrs_3d, axis=0)
-    centroid_depth = np.mean(corrs_depthified, axis=0)
-
-    # 2. Center the points
-    Y = corrs_3d - centroid_3d
-    X = corrs_depthified - centroid_depth
-
-    # 3. Covariance
-    H = X.T @ Y
-
-    # 4. SVD
-    U, S, Vt = np.linalg.svd(H)
-
-    # 5. Rotation
-    R = Vt.T @ U.T
-
-    # 6. Reflection fix
-    if np.linalg.det(R) < 0:
-        Vt[-1, :] *= -1
-        R = Vt.T @ U.T
-
-    # 7. Translation
-    t = centroid_depth - R @ centroid_3d
-
-    # 8. Homogeneous transform
-    T = np.eye(4)
-    T[:3, :3] = R
-    T[:3, 3] = t
-
-    return T
-
-def apply_transformation(points, transform):
-    """
-    points: (N, 3) numpy array
-    T: (4, 4) homogeneous transformation matrix
-
-    returns: (N, 3) transformed points
-    """
-    # convert to homogeneous coordinates (N, 4)
-    ones = np.ones((points.shape[0], 1))
-    points_h = np.hstack((points, ones))
-
-    # apply transformation
-    transformed_h = (transform @ points_h.T).T
-
-    # convert back to (N, 3)
-    return transformed_h[:, :3]
-
-
-def boring_transform(points, ratios, idx_set):
-    scale_factor = np.median(ratios[idx_set])
-    return points / scale_factor
-    
-
-
-
 
 def get_ratios(meshes_depthified, meshes):
 
@@ -171,6 +124,7 @@ def get_ratios(meshes_depthified, meshes):
 
         hand_ratios.append(ratios)
     return hand_ratios
+
 
 def get_point_cloud(frame_no):
     depth_img = Image.open('../depth_data/depth/'+frame_no+".png")
@@ -203,9 +157,6 @@ if __name__ == "__main__":
     wilor_data = np.load(npzs_path + 'frame_' + frame_no + '.npz')
     meshes_3d, meshes_2d, skeletons_2d, skeletons_3d, faces, handednesses = wilor_data['meshes_3d'], wilor_data['meshes_2d'], wilor_data['skeletons_2d'], wilor_data['skeletons_3d'], wilor_data['faces'], wilor_data['handednesses']
 
-
-    print(handednesses.shape)
-
     mesh = meshes_3d[0]
 
     REFERENCE_VERTICES = 300
@@ -218,17 +169,17 @@ if __name__ == "__main__":
     labels = kmeans.labels_
 
 
-    np.save("cluster_labels.npy", labels)
+    np.save(CLUSTER_PATH, labels)
 
-    labels = np.load("cluster_labels.npy")
+    labels = np.load(CLUSTER_PATH)
 
     server = viser.ViserServer()
 
+    left_hand, right_hand = split_hands(wilor_data)
+    left_index, right_index = determine_hands(handednesses)
+
     points, depth, colors = get_point_cloud(frame_no)
-
-
-
-    cluster_rosters = get_cluster_rosters()
+    cluster_rosters = cluster_utils.get_cluster_rosters(CLUSTER_PATH, N_CLUSTERS)
 
     meshes_depthified = depthify_2d_hands(depth, meshes_2d)
 
@@ -236,14 +187,14 @@ if __name__ == "__main__":
 
     ratios = hand_ratios[0]
 
-    median_idx_sets = get_cluster_median_sets(cluster_rosters, hand_ratios)
-    median_point_sets_depthified = pointify_median_idx_sets(median_idx_sets, meshes_depthified)
-    median_point_sets_3d = pointify_median_idx_sets(median_idx_sets, meshes_3d)
+    median_idx_sets = cluster_utils.get_cluster_median_sets(cluster_rosters, hand_ratios)
+    median_point_sets_depthified = cluster_utils.pointify_median_idx_sets(median_idx_sets, meshes_depthified)
+    median_point_sets_3d = cluster_utils.pointify_median_idx_sets(median_idx_sets, meshes_3d)
 
-    transform = find_transformation(median_idx_sets[0], meshes_3d[0], meshes_depthified[0])
-    transformed_mesh = apply_transformation(meshes_3d[0], transform)
+    transform = cluster_utils.find_transformation(median_idx_sets[0], meshes_3d[0], meshes_depthified[0])
+    transformed_mesh = cluster_utils.apply_transformation(meshes_3d[0], transform)
 
-    boring_mesh = boring_transform(meshes_3d[0], ratios, median_idx_sets[0])
+    boring_mesh = cluster_utils.boring_transform(meshes_3d[0], ratios, median_idx_sets[0])
 
     centroid = np.mean(mesh, axis=0)
     #centroid = np.zeros(3)

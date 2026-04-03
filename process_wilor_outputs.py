@@ -3,8 +3,7 @@ from PIL import Image
 import time
 
 from quaternion_utils import generate_rotation_quaternion
-#from cluster_hand import find_transformation
-from cluster_hand import find_transformation, apply_transformation, get_cluster_rosters, get_cluster_median_sets, pointify_median_idx_sets, boring_transform
+from cluster_utils import *
 import viser
 import yourdfpy
 from viser.extras import ViserUrdf
@@ -25,6 +24,8 @@ COLOR_3D = np.array((250, 150, 250)) #pink
 COLOR_CORRECTED = (150, 250, 250) #teal
 COLOR_GRIPPER = (40, 40, 40)
 COLOR_TRANSFORMED = (150, 150, 250) 
+COLOR_LEFT = (250, 0, 0)
+COLOR_RIGHT = (0, 0, 250)
 
 CLUSTER_PATH = "cluster_labels.npy"
 N_CLUSTERS = 24
@@ -43,7 +44,28 @@ initial_lateral = np.array((-1.0, 0, 0))
 
 npz_path = '../hand_npzs/'
 
+def determine_hands(handednesses):
+    left_index, right_index = None, None
 
+    if len(handednesses) == 0:
+        print("no hands detected")
+    elif len(handednesses) > 2:
+        print("too many hands in frame")
+    elif len(handednesses) == 2 and handednesses[0] == handednesses[1]:
+        print("two of the same side hand")
+    elif len(handednesses) == 1:
+        if handednesses[0] == 0:
+            left_index = 0
+        else:
+            right_index = 0
+    elif len(handednesses) == 2:
+        if handednesses[0] == 0:
+            left_index = 0
+            right_index = 1
+        else:
+            left_index = 1
+            right_index = 0
+    return left_index, right_index
 
 def get_ratios(meshes_depthified, meshes):
 
@@ -59,11 +81,6 @@ def get_ratios(meshes_depthified, meshes):
 
         hand_ratios.append(ratios)
     return hand_ratios
-
-
-    
-
-
 
 def correct_hand_depths(meshes_depthified, skeletons_3d, meshes):
 
@@ -85,6 +102,21 @@ def correct_hand_depths(meshes_depthified, skeletons_3d, meshes):
         corrected_skeletons.append(scale_factor * skeleton_3d)
         corrected_meshes.append(scale_factor * mesh)
     return corrected_skeletons, corrected_meshes
+
+def transform_meshes(median_idx_sets, meshes_3d, meshes_depthified):
+    transformed_meshes = []
+    for i in range(len(meshes_3d)):
+        transform = find_transformation(median_idx_sets[i], meshes_3d[i], meshes_depthified[i])
+        transformed_mesh = apply_transformation(meshes_3d[i], transform)
+        transformed_meshes.append(transformed_mesh)
+    return transformed_meshes
+
+def boring_transform_meshes(meshes_3d, hand_ratios, median_idx_sets):
+    transformed_meshes = []
+    for i in range(len(meshes_3d)):
+        transformed_mesh = boring_transform(meshes_3d[i], hand_ratios[i], median_idx_sets[i])
+        transformed_meshes.append(transformed_mesh)
+    return transformed_meshes
 
 def depthify_2d_hands(depth, hands_2d):
 
@@ -128,7 +160,7 @@ def gripperify_skeletons(skeletons_3d):
         gripper_direction = (gripper_end - base)
 
         #gripper is bigger than hand, so want to slide gripper back a little
-        base -= gripper_direction
+        base -= 2 * gripper_direction
 
         grasp_direction = fingers - thumb
 
@@ -176,27 +208,27 @@ def get_hands_centroid(meshes):
     all_vertices = np.concatenate(meshes, axis=0)
     return np.mean(all_vertices, axis=0)
 
+def render_mesh(handle, mesh, faces, centroid=None):
+    rendering_mesh = mesh.copy()
+    if centroid is not None:
+        rendering_mesh -= centroid
+    handle.vertices = rendering_mesh
+    handle.faces = faces
+    handle.visible = True
+
 def render_meshes(handles, meshes, faces, centroid=None):
-
     for i in range(len(meshes)):
-        mesh = meshes[i]
-        handle = handles[i]
-
-        rendering_mesh = mesh.copy()
-        if centroid is not None:
-            rendering_mesh -= centroid
-
-        handle.vertices = rendering_mesh
-        handle.faces = faces
+        render_mesh(handles[i], meshes[i], faces, centroid)
 
 def initialize_mesh(server, name, color):
-
-    return server.scene.add_mesh_simple(
+    handle = server.scene.add_mesh_simple(
         name=name,
         vertices=np.zeros((2, 3)),
         faces=np.zeros((1, 3)),
         color=color
     )
+    handle.visible = False
+    return handle
 
 def render_grippers(frame_handles, urdf_handles, bases, gripper_directions, grasp_directions, graspnesses, centroid=None):
 
@@ -248,14 +280,17 @@ def render_cloud(handle, points, colors, centroid=None):
 
     handle.points = rendering_points
     handle.colors = colors
+    handle.visible = True
 
 def initialize_cloud(server, name, point_size):
-    return server.scene.add_point_cloud(
+    handle = server.scene.add_point_cloud(
         name=name,
         points=np.zeros((1, 3)),
         colors=np.zeros((1, 3)),
         point_size=point_size,
     )
+    handle.visible = False
+    return handle
 
 server = viser.ViserServer()
 
@@ -274,10 +309,12 @@ left_corrected_handle = initialize_mesh(server, "left hand corrected", COLOR_COR
 right_corrected_handle = initialize_mesh(server, "right hand corrected", COLOR_CORRECTED)
 corrected_handles = [left_corrected_handle, right_corrected_handle]
 
-transformed_handle = initialize_mesh(server, "transform mesh", COLOR_TRANSFORMED)
+left_transformed_handle = initialize_mesh(server, "left transformed mesh", COLOR_TRANSFORMED)
+right_transformed_handle = initialize_mesh(server, "right transformed mesh", COLOR_TRANSFORMED)
+transformed_handles = [left_transformed_handle, right_transformed_handle]
 
-left_original_handle = initialize_mesh(server, "left hand original", COLOR_3D)
-right_original_handle = initialize_mesh(server, "right hand original", COLOR_3D)
+left_original_handle = initialize_mesh(server, "left hand original", COLOR_LEFT)
+right_original_handle = initialize_mesh(server, "right hand original", COLOR_RIGHT)
 original_handles = [left_original_handle, right_original_handle]
 
 left_gripper_handle, left_urdf_handle = initialize_gripper(server, "/left gripper")
@@ -287,9 +324,7 @@ gripper_urdf_handles = [left_urdf_handle, right_urdf_handle]
 
 
 
-
-
-cluster_rosters = get_cluster_rosters()
+cluster_rosters = get_cluster_rosters(CLUSTER_PATH, N_CLUSTERS)
 hands_centroid = np.array((0.03,0.07,0.45))
 print("wahoo made it")
 fps = 12
@@ -303,8 +338,8 @@ for i in range(start_frame, end_frame):
 
     frame_no = str(i).zfill(6)
 
-    wilor_data = np.load('../hand_npzs/frame_' + str(i).zfill(6) + '.npz')
-    meshes_3d, meshes_2d, skeletons_2d, skeletons_3d, faces = wilor_data['meshes_3d'], wilor_data['meshes_2d'], wilor_data['skeletons_2d'], wilor_data['skeletons_3d'], wilor_data['faces']
+    wilor_data = np.load('../handed_npzs/frame_' + str(i).zfill(6) + '.npz')
+    meshes_3d, meshes_2d, skeletons_2d, skeletons_3d, faces, handednesses = wilor_data['meshes_3d'], wilor_data['meshes_2d'], wilor_data['skeletons_2d'], wilor_data['skeletons_3d'], wilor_data['faces'], wilor_data['handednesses']
 
     points, depth, colors = get_point_cloud(i)
     skeletons_depthified = depthify_2d_hands(depth, skeletons_2d)
@@ -315,27 +350,41 @@ for i in range(start_frame, end_frame):
     median_idx_sets = get_cluster_median_sets(cluster_rosters, hand_ratios)
     median_point_sets = pointify_median_idx_sets(median_idx_sets, meshes_3d)
 
-    transform = find_transformation(median_idx_sets[0], meshes_3d[0], meshes_depthified[0])
-    transformed_mesh = apply_transformation(meshes_3d[0], transform)
+    transformed_meshes = transform_meshes(median_idx_sets, meshes_3d, meshes_depthified)
 
-    boring_mesh = boring_transform(meshes_3d[0], hand_ratios[0], median_idx_sets[0])
+    boring_meshes = boring_transform_meshes(meshes_3d, hand_ratios, median_idx_sets)
+    boring_skeletons = boring_transform_meshes(skeletons_3d, hand_ratios, median_idx_sets)
+
 
     corrected_skeletons, corrected_meshes = correct_hand_depths(meshes_depthified, skeletons_3d, meshes_3d)
-    #corrected hands
+    #corrected hands -> gripper
     gripper_bases, gripper_directions, grasp_directions, graspnesses = gripperify_skeletons(corrected_skeletons)
-    #original hands
+    #original hands -> gripper
     gripper_bases, gripper_directions, grasp_directions, graspnesses = gripperify_skeletons(skeletons_3d)
+    #boring transformed hands -> gripper
+    gripper_bases, gripper_directions, grasp_directions, graspnesses = gripperify_skeletons(boring_skeletons)
 
+
+    left_index, right_index = determine_hands(handednesses)
 
     render_cloud(point_cloud_handle, points, colors, hands_centroid)
 
     #render_clouds(medians_handles, median_point_sets, COLOR_3D, hands_centroid)
 
-    render_meshes([transformed_handle], [transformed_mesh], faces, hands_centroid)
-    render_meshes([transformed_handle], [boring_mesh], faces, hands_centroid)
-
     #render_meshes(corrected_handles, corrected_meshes, faces, hands_centroid)
-    render_meshes(original_handles, meshes_3d, faces, hands_centroid)
+
+    if left_index is not None:
+        render_mesh(left_original_handle, meshes_3d[left_index], faces, hands_centroid)
+        render_mesh(left_transformed_handle, boring_meshes[left_index], faces, hands_centroid)
+    else:
+        left_original_handle.visible = False
+        left_transformed_handle.visible = False
+    if right_index is not None:
+        render_mesh(right_original_handle, meshes_3d[right_index], faces, hands_centroid)
+        render_mesh(right_transformed_handle, boring_meshes[right_index], faces, hands_centroid)
+    else:
+        right_original_handle.visible = False
+        right_transformed_handle.visible = False
 
     render_grippers(gripper_frame_handles, gripper_urdf_handles, gripper_bases, gripper_directions, grasp_directions, graspnesses, hands_centroid)
 
