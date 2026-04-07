@@ -2,6 +2,8 @@ import numpy as np
 from PIL import Image
 import time
 import cv2
+from scipy.spatial.transform import Rotation as R_scipy
+
 
 from quaternion_utils import generate_rotation_quaternion
 from quaternion_utils import generate_xyzrpy
@@ -74,31 +76,11 @@ def determine_hands(handednesses):
             right_index = 0
     return left_index, right_index
 
-def snap_gripper(bases, gripper_directions, grasp_directions, box_quaternion, box_position):
-    snapped_bases = []
-    snapped_gripper_directions = []
-    snapped_grasp_directions = []
-    for i in range(len(bases)):
-        base = bases[i]
-        gripper_direction = gripper_directions[i]
-        grasp_direction = grasp_directions[i]
-
-
-from scipy.spatial.transform import Rotation as R
-
-def snap_gripper(bases, gripper_directions, grasp_directions, box_quaternion, box_position):
-    """
-    Snap grasp + gripper directions to align with a box frame.
-
-    bases, gripper_directions, grasp_directions: list of (3,) np arrays
-    box_quaternion: (w, x, y, z)
-    box_position: (3,) np array
-    """
-
+def snap_gripper(bases, gripper_directions, box_quaternion, box_position):
     # Convert quaternion → rotation matrix
     quat = np.array(box_quaternion)
     quat_xyzw = np.roll(quat, -1)  # (w,x,y,z) → (x,y,z,w)
-    R_box = R.from_quat(quat_xyzw).as_matrix()
+    R_box = R_scipy.from_quat(quat_xyzw).as_matrix()
 
     # Box axes (columns of rotation matrix)
     box_axes = [R_box[:, 0], R_box[:, 1], R_box[:, 2]]
@@ -127,12 +109,21 @@ def snap_gripper(bases, gripper_directions, grasp_directions, box_quaternion, bo
 
         snapped_base = base - dist * plane_normal
 
-        # --- store ---
         snapped_bases.append(snapped_base)
         snapped_gripper_directions.append(snapped_gripper)
         snapped_grasp_directions.append(snapped_grasp)
 
     return snapped_bases, snapped_gripper_directions, snapped_grasp_directions
+
+def quatify_grippers(gripper_directions, grasp_directions):
+    quaternions = []
+    for i in range(len(gripper_directions)):
+        gripper_direction = gripper_directions[i]
+        grasp_direction = grasp_directions[i]
+        quaternion = generate_rotation_quaternion(gripper_direction, grasp_direction, initial_approach, initial_lateral)
+        quaternions.append(quaternion)
+    return quaternions
+        
 
     
 def gripperify_skeletons(skeletons_3d):
@@ -221,14 +212,13 @@ def initialize_mesh(server, name, color):
     handle.visible = False
     return handle
 
-def render_grippers(frame_handles, urdf_handles, bases, gripper_directions, grasp_directions, graspnesses, centroid=None):
+def render_grippers(frame_handles, urdf_handles, bases, quaternions, graspnesses, centroid=None):
 
     for i in range(len(bases)):
         frame_handle = frame_handles[i]
         urdf_handle = urdf_handles[i]
         base = bases[i]
-        gripper_direction = gripper_directions[i]
-        grasp_direction = grasp_directions[i]
+        quaternion = quaternions[i]
         graspness = graspnesses[i]
 
         rendering_position = base.copy()
@@ -238,10 +228,9 @@ def render_grippers(frame_handles, urdf_handles, bases, gripper_directions, gras
 
         #print(rendering_position)
 
-        rotation_quaternion = generate_rotation_quaternion(gripper_direction, grasp_direction, initial_approach, initial_lateral)
 
         frame_handle.position = rendering_position
-        frame_handle.wxyz = rotation_quaternion
+        frame_handle.wxyz = quaternion
 
         #0.08 arbitrary threshold
         if graspness < GRASPNESS_THRESHOLD:
@@ -319,7 +308,6 @@ def initialize_box(server, name):
 
 server = viser.ViserServer()
 
-    
 
 #point cloud reconstructed from rgbd data
 
@@ -338,9 +326,10 @@ right_gripper_handle, right_urdf_handle = initialize_gripper(server, "/right gri
 gripper_frame_handles = [left_gripper_handle, right_gripper_handle]
 gripper_urdf_handles = [left_urdf_handle, right_urdf_handle]
 
-
-left_gripper_poses = []
-right_gripper_poses = []
+left_bases = []
+left_quats = []
+right_bases = []
+right_quats = []
 left_graspnesses = []
 right_graspnesses = []
 box_poses = []
@@ -350,7 +339,7 @@ hands_centroid = np.array((0.03,0.07,0.45))
 hands_centroid = None
 
 print("wahoo made it")
-fps = 100
+fps = 200
 dt = 1.0 / fps
 
 start_frame = 400
@@ -360,6 +349,8 @@ for i in range(start_frame, end_frame):
     t0 = time.time()
 
     frame_no = str(i).zfill(6)
+
+    print(i)
 
     wilor_data = np.load(npz_prefix + str(i).zfill(6) + '.npz')
     meshes_3d, meshes_2d, skeletons_2d, skeletons_3d, faces, handednesses = wilor_data['meshes_3d'], wilor_data['meshes_2d'], wilor_data['skeletons_2d'], wilor_data['skeletons_3d'], wilor_data['faces'], wilor_data['handednesses']
@@ -373,8 +364,8 @@ for i in range(start_frame, end_frame):
 
     #original hands -> gripper
     gripper_bases, gripper_directions, grasp_directions, graspnesses = gripperify_skeletons(skeletons_3d)
-
-    gripper_bases, gripper_directions, grasp_directions = snap_gripper(gripper_bases, gripper_directions, grasp_directions, box_quaternion, box_position)
+    gripper_bases, gripper_directions, grasp_directions = snap_gripper(gripper_bases, gripper_directions, box_quaternion, box_position)
+    gripper_quaternions = quatify_grippers(gripper_directions, grasp_directions)
 
 
     left_index, right_index = determine_hands(handednesses)
@@ -387,33 +378,33 @@ for i in range(start_frame, end_frame):
 
     if left_index is not None:
         render_mesh(left_original_handle, meshes_3d[left_index], faces, hands_centroid)
-        rotation_quaternion = generate_rotation_quaternion(gripper_directions[left_index], grasp_directions[left_index], initial_approach, initial_lateral)
-        left_pose = generate_xyzrpy(rotation_quaternion, gripper_bases[left_index])
-        left_gripper_poses.append(left_pose)
+        left_bases.append(gripper_bases[left_index])
+        left_quats.append(gripper_quaternions[left_index])
         if graspnesses[left_index] < GRASPNESS_THRESHOLD:
             left_graspnesses.append(1)
         else:
             left_graspnesses.append(0)
     else:
         left_original_handle.visible = False
-        left_gripper_poses.append(np.full(6, np.inf))
+        left_bases.append(np.full(3, np.inf))
+        left_quats.append(np.full(4, np.inf))
         left_graspnesses.append(0)
     if right_index is not None:
         render_mesh(right_original_handle, meshes_3d[right_index], faces, hands_centroid)
-        rotation_quaternion = generate_rotation_quaternion(gripper_directions[right_index], grasp_directions[right_index], initial_approach, initial_lateral)
-        right_pose = generate_xyzrpy(rotation_quaternion, gripper_bases[right_index])
-        right_gripper_poses.append(right_pose)
+        right_bases.append(gripper_bases[right_index])
+        right_quats.append(gripper_quaternions[right_index])
         if graspnesses[right_index] < GRASPNESS_THRESHOLD:
             right_graspnesses.append(1)
         else:
             right_graspnesses.append(0)
     else:
         right_original_handle.visible = False
-        right_gripper_poses.append(np.full(6, np.inf))
+        right_bases.append(np.full(3, np.inf))
+        right_quats.append(np.full(4, np.inf))
         right_graspnesses.append(0)
     
 
-    render_grippers(gripper_frame_handles, gripper_urdf_handles, gripper_bases, gripper_directions, grasp_directions, graspnesses, hands_centroid)
+    render_grippers(gripper_frame_handles, gripper_urdf_handles, gripper_bases, gripper_quaternions, graspnesses, hands_centroid)
 
 
     elapsed = time.time() - t0
@@ -422,12 +413,16 @@ for i in range(start_frame, end_frame):
 
 
 box_poses = np.array(box_poses)
-right_gripper_poses = np.array(right_gripper_poses)
-left_gripper_poses = np.array(left_gripper_poses)
+left_bases = np.array(left_bases)
+right_bases = np.array(right_bases)
+right_quats = np.array(right_quats)
+left_quats = np.array(left_quats)
 right_gripper_grasps = np.array(right_graspnesses)
 left_gripper_grasps = np.array(left_graspnesses)
 
-np.savez('demo_0_poses.npz', box_poses=box_poses, left_gripper_poses=left_gripper_poses, right_gripper_poses=right_gripper_poses, left_gripper_grasps=left_gripper_grasps, right_gripper_grasps=right_gripper_grasps)
+
+
+np.savez('demo_quaternion_poses.npz', box_poses=box_poses, left_bases=left_bases, right_bases=right_bases, left_quats=left_quats, right_quats=right_quats, right_gripper_grasps=right_gripper_grasps, left_gripper_grasps=left_gripper_grasps)
 
 
 
