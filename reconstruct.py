@@ -67,9 +67,7 @@ def detect_aruco_pose(image_bgr, K, dist_coeffs, marker_length):
             if not success:
                 continue
 
-
-
-            poses.append((int(ids[i]), rvec, tvec))
+            poses.append((int(ids[i][0]), rvec, tvec))
 
             '''# --- Draw axes ---
             cv2.drawFrameAxes(
@@ -82,8 +80,6 @@ def detect_aruco_pose(image_bgr, K, dist_coeffs, marker_length):
             )
             '''
 
-    #cv2.imshow("Aruco Pose (solvePnP)", image_bgr)
-    #cv2.waitKey(0)
 
     return poses
 
