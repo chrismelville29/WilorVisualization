@@ -1,12 +1,16 @@
 import numpy as np
 from PIL import Image
 import time
+import cv2
 
 from quaternion_utils import generate_rotation_quaternion
-from cluster_utils import *
+from quaternion_utils import generate_xyzrpy
+import reconstruct
 import viser
 import yourdfpy
 from viser.extras import ViserUrdf
+
+GRASPNESS_THRESHOLD = 0.06
 
 #intrinsics
 fx, fy, cx, cy = 1366.3287, 1366.3287, 957.5452, 722.60974
@@ -15,6 +19,13 @@ fx *= 0.1333333333
 fy *= 0.1333333333
 cx *= 0.1333333333
 cy *= 0.1333333333
+
+fx, fy, cx, cy = 597.01702881, 597.04272461, 327.60223389, 240.29771423
+intrinsic_matrix = reconstruct.matrix_from_intrix(fx, fy, cx, cy)
+
+npz_prefix = '../chris_hands/frame_'
+depth_prefix = '../board_captures/depth_captures/20260404_122039/frame_'
+color_prefix = '../board_captures/color_captures/20260404_122039/frame_'
 
 DEPTHIMG_HEIGHT = 192
 DEPTHIMG_WIDTH = 256
@@ -26,10 +37,6 @@ COLOR_GRIPPER = (40, 40, 40)
 COLOR_TRANSFORMED = (150, 150, 250) 
 COLOR_LEFT = (250, 0, 0)
 COLOR_RIGHT = (0, 0, 250)
-
-CLUSTER_PATH = "cluster_labels.npy"
-N_CLUSTERS = 24
-REFERENCE_VERTICES = 300
 
 URDF_PATH = "../gripper_model/robots/robotiq_arg85_description.URDF" 
 urdf = yourdfpy.URDF.load(
@@ -67,83 +74,67 @@ def determine_hands(handednesses):
             right_index = 0
     return left_index, right_index
 
-def get_ratios(meshes_depthified, meshes):
-
-    hand_ratios = []
-    for i in range(len(meshes_depthified)):
-        cloud_skeleton = meshes_depthified[i]
-        mesh = meshes[i]
-
-        cloud_norms = np.linalg.norm(cloud_skeleton, axis=1)
-        mesh_norms = np.linalg.norm(mesh, axis=1)
-
-        ratios = (mesh_norms / cloud_norms)[:REFERENCE_VERTICES]
-
-        hand_ratios.append(ratios)
-    return hand_ratios
-
-def correct_hand_depths(meshes_depthified, skeletons_3d, meshes):
-
-    corrected_skeletons = []
-    corrected_meshes = []
-    for i in range(len(meshes_depthified)):
-        cloud_skeleton = meshes_depthified[i]
-        skeleton_3d = skeletons_3d[i]
-        mesh = meshes[i]
-
-        cloud_norms = np.linalg.norm(cloud_skeleton, axis=1)
-        mesh_norms = np.linalg.norm(mesh, axis=1)
-
-        ratios = cloud_norms / mesh_norms
+def snap_gripper(bases, gripper_directions, grasp_directions, box_quaternion, box_position):
+    snapped_bases = []
+    snapped_gripper_directions = []
+    snapped_grasp_directions = []
+    for i in range(len(bases)):
+        base = bases[i]
+        gripper_direction = gripper_directions[i]
+        grasp_direction = grasp_directions[i]
 
 
-        scale_factor = np.sort(ratios)[-50]
+from scipy.spatial.transform import Rotation as R
 
-        corrected_skeletons.append(scale_factor * skeleton_3d)
-        corrected_meshes.append(scale_factor * mesh)
-    return corrected_skeletons, corrected_meshes
+def snap_gripper(bases, gripper_directions, grasp_directions, box_quaternion, box_position):
+    """
+    Snap grasp + gripper directions to align with a box frame.
 
-def transform_meshes(median_idx_sets, meshes_3d, meshes_depthified):
-    transformed_meshes = []
-    for i in range(len(meshes_3d)):
-        transform = find_transformation(median_idx_sets[i], meshes_3d[i], meshes_depthified[i])
-        transformed_mesh = apply_transformation(meshes_3d[i], transform)
-        transformed_meshes.append(transformed_mesh)
-    return transformed_meshes
+    bases, gripper_directions, grasp_directions: list of (3,) np arrays
+    box_quaternion: (w, x, y, z)
+    box_position: (3,) np array
+    """
 
-def boring_transform_meshes(meshes_3d, hand_ratios, median_idx_sets):
-    transformed_meshes = []
-    for i in range(len(meshes_3d)):
-        transformed_mesh = boring_transform(meshes_3d[i], hand_ratios[i], median_idx_sets[i])
-        transformed_meshes.append(transformed_mesh)
-    return transformed_meshes
+    # Convert quaternion → rotation matrix
+    quat = np.array(box_quaternion)
+    quat_xyzw = np.roll(quat, -1)  # (w,x,y,z) → (x,y,z,w)
+    R_box = R.from_quat(quat_xyzw).as_matrix()
 
-def depthify_2d_hands(depth, hands_2d):
+    # Box axes (columns of rotation matrix)
+    box_axes = [R_box[:, 0], R_box[:, 1], R_box[:, 2]]
 
-    hands_depthified = []
+    snapped_bases = []
+    snapped_gripper_directions = []
+    snapped_grasp_directions = []
 
-    for i in range(len(hands_2d)):
+    for i in range(len(bases)):
+        base = bases[i]
+        g_dir = gripper_directions[i]
 
-        
-        hand_2d = hands_2d[i]
+        snapped_grasp = box_axes[2]
 
-        uv = np.floor(hand_2d).astype(int)
-        u = np.clip(uv[:, 0], a_min=0, a_max=DEPTHIMG_WIDTH-1)
-        v = np.clip(uv[:, 1], a_min=0, a_max=DEPTHIMG_HEIGHT-1)
+        g_proj = g_dir - np.dot(g_dir, snapped_grasp) * snapped_grasp
+        snapped_gripper = g_proj / np.linalg.norm(g_proj)
 
-        # Gather depths in one shot
-        Z = depth[v, u]
+        # --- 3. Recompute base (keep geometry consistent) ---
+        # assume base lies along negative grasp direction from box
+        # project original offset onto new grasp direction
+        plane_point = box_position.reshape(3)
+        plane_normal = snapped_grasp  # already aligned with box axis
 
-        # Compute XYZ
-        X = (u - cx) * Z / fx
-        Y = (v - cy) * Z / fy
+        offset = base - plane_point
+        dist = np.dot(offset, plane_normal)
 
-        hand_depthified = np.stack([X, Y, Z], axis=1)
+        snapped_base = base - dist * plane_normal
 
-        hands_depthified.append(hand_depthified)
+        # --- store ---
+        snapped_bases.append(snapped_base)
+        snapped_gripper_directions.append(snapped_gripper)
+        snapped_grasp_directions.append(snapped_grasp)
 
-    return hands_depthified
+    return snapped_bases, snapped_gripper_directions, snapped_grasp_directions
 
+    
 def gripperify_skeletons(skeletons_3d):
     bases = []
     gripper_directions = []
@@ -182,8 +173,8 @@ def gripperify_skeletons(skeletons_3d):
 
 def get_point_cloud(frame_no):
     depth_frame_no = frame_no
-    depth_img = Image.open('../depth_data/depth/'+str(depth_frame_no).zfill(6)+".png")
-    color_img = Image.open('../frames/frame_'+str(frame_no).zfill(6)+".png")
+    depth_img = Image.open(depth_prefix + str(depth_frame_no).zfill(6) + ".png")
+    color_img = Image.open(color_prefix + str(frame_no).zfill(6) + ".png")
 
     depth = np.asarray(depth_img) / 1000
     colors = np.asarray(color_img).reshape(-1, 3)
@@ -253,7 +244,7 @@ def render_grippers(frame_handles, urdf_handles, bases, gripper_directions, gras
         frame_handle.wxyz = rotation_quaternion
 
         #0.08 arbitrary threshold
-        if graspness < 0.05:
+        if graspness < GRASPNESS_THRESHOLD:
             urdf_handle.update_cfg(np.array([0.8])) #0.8 for closed.
         else:
             urdf_handle.update_cfg(np.array([0.1]))
@@ -268,6 +259,21 @@ def initialize_gripper(server, name):
     gripper = ViserUrdf(server, urdf, root_node_name=name)
 
     return handle, gripper
+
+def render_box(axis_handle, box_handle, quaternion, position, centroid=None):
+    rendering_position = position.copy()
+    if centroid is not None:
+        rendering_position -= centroid
+
+    axis_handle.wxyz = quaternion
+    axis_handle.position = rendering_position
+
+    box_handle.wxyz = quaternion
+    box_handle.position = rendering_position
+
+    axis_handle.visible = True
+    box_handle.visible = True
+
 
 def render_clouds(handles, clouds, colors, centroid=None):
     for i in range(len(clouds)):
@@ -292,6 +298,25 @@ def initialize_cloud(server, name, point_size):
     handle.visible = False
     return handle
 
+def initialize_axes(server, name):
+    handle = server.scene.add_frame(
+        name=name,
+        wxyz=(1, 0, 0, 0),
+        position=np.array((0, 0, 0)),
+    )
+    handle.visible = False
+    return handle
+
+def initialize_box(server, name):
+    handle = server.scene.add_box(
+        name=name,
+        dimensions=(.304, .304, .004), 
+        color=(255, 0, 0),
+        position=np.zeros(3),   
+    )
+    handle.visible = False
+    return handle
+
 server = viser.ViserServer()
 
     
@@ -300,18 +325,9 @@ server = viser.ViserServer()
 
 point_cloud_handle = initialize_cloud(server, "point cloud", point_size=0.001)
 
+axes_handle = initialize_axes(server, "aruco pose")
 
-left_medians_handle = initialize_cloud(server, "left medians", point_size=0.01)
-right_medians_handle = initialize_cloud(server, "right medians", point_size=0.01)
-medians_handles = [left_medians_handle, right_medians_handle]
-
-left_corrected_handle = initialize_mesh(server, "left hand corrected", COLOR_CORRECTED)
-right_corrected_handle = initialize_mesh(server, "right hand corrected", COLOR_CORRECTED)
-corrected_handles = [left_corrected_handle, right_corrected_handle]
-
-left_transformed_handle = initialize_mesh(server, "left transformed mesh", COLOR_TRANSFORMED)
-right_transformed_handle = initialize_mesh(server, "right transformed mesh", COLOR_TRANSFORMED)
-transformed_handles = [left_transformed_handle, right_transformed_handle]
+box_handle = initialize_box(server, "cardboard sheet")
 
 left_original_handle = initialize_mesh(server, "left hand original", COLOR_LEFT)
 right_original_handle = initialize_mesh(server, "right hand original", COLOR_RIGHT)
@@ -323,69 +339,79 @@ gripper_frame_handles = [left_gripper_handle, right_gripper_handle]
 gripper_urdf_handles = [left_urdf_handle, right_urdf_handle]
 
 
+left_gripper_poses = []
+right_gripper_poses = []
+left_graspnesses = []
+right_graspnesses = []
+box_poses = []
 
-cluster_rosters = get_cluster_rosters(CLUSTER_PATH, N_CLUSTERS)
+
 hands_centroid = np.array((0.03,0.07,0.45))
 hands_centroid = None
+
 print("wahoo made it")
-fps = 12
+fps = 100
 dt = 1.0 / fps
 
-start_frame = 0
-end_frame = 700
+start_frame = 400
+end_frame = 1100
 
 for i in range(start_frame, end_frame):
     t0 = time.time()
 
     frame_no = str(i).zfill(6)
 
-    wilor_data = np.load('../handed_npzs/frame_' + str(i).zfill(6) + '.npz')
+    wilor_data = np.load(npz_prefix + str(i).zfill(6) + '.npz')
     meshes_3d, meshes_2d, skeletons_2d, skeletons_3d, faces, handednesses = wilor_data['meshes_3d'], wilor_data['meshes_2d'], wilor_data['skeletons_2d'], wilor_data['skeletons_3d'], wilor_data['faces'], wilor_data['handednesses']
 
     points, depth, colors = get_point_cloud(i)
-    skeletons_depthified = depthify_2d_hands(depth, skeletons_2d)
-    meshes_depthified = depthify_2d_hands(depth, meshes_2d)
 
-    hand_ratios = get_ratios(meshes_depthified, meshes_3d)
+    color_img = cv2.imread(color_prefix + frame_no + '.png')
+    
+    _, rvec, tvec = reconstruct.detect_aruco_pose(color_img, intrinsic_matrix, None, 0.05)[0]
+    box_quaternion, box_position = reconstruct.quatnpos_from_vector(tvec, rvec)
 
-    median_idx_sets = get_cluster_median_sets(cluster_rosters, hand_ratios)
-    median_point_sets = pointify_median_idx_sets(median_idx_sets, meshes_3d)
-
-    transformed_meshes = transform_meshes(median_idx_sets, meshes_3d, meshes_depthified)
-
-    boring_meshes = boring_transform_meshes(meshes_3d, hand_ratios, median_idx_sets)
-    boring_skeletons = boring_transform_meshes(skeletons_3d, hand_ratios, median_idx_sets)
-
-
-    corrected_skeletons, corrected_meshes = correct_hand_depths(meshes_depthified, skeletons_3d, meshes_3d)
-    #corrected hands -> gripper
-    gripper_bases, gripper_directions, grasp_directions, graspnesses = gripperify_skeletons(corrected_skeletons)
     #original hands -> gripper
     gripper_bases, gripper_directions, grasp_directions, graspnesses = gripperify_skeletons(skeletons_3d)
-    #boring transformed hands -> gripper
-    gripper_bases, gripper_directions, grasp_directions, graspnesses = gripperify_skeletons(boring_skeletons)
+
+    gripper_bases, gripper_directions, grasp_directions = snap_gripper(gripper_bases, gripper_directions, grasp_directions, box_quaternion, box_position)
 
 
     left_index, right_index = determine_hands(handednesses)
 
     render_cloud(point_cloud_handle, points, colors, hands_centroid)
 
-    #render_clouds(medians_handles, median_point_sets, COLOR_3D, hands_centroid)
-
-    #render_meshes(corrected_handles, corrected_meshes, faces, hands_centroid)
+    render_box(axes_handle, box_handle, box_quaternion, box_position, hands_centroid)
+    box_pose = generate_xyzrpy(box_quaternion, box_position)
+    box_poses.append(box_pose)
 
     if left_index is not None:
         render_mesh(left_original_handle, meshes_3d[left_index], faces, hands_centroid)
-        render_mesh(left_transformed_handle, boring_meshes[left_index], faces, hands_centroid)
+        rotation_quaternion = generate_rotation_quaternion(gripper_directions[left_index], grasp_directions[left_index], initial_approach, initial_lateral)
+        left_pose = generate_xyzrpy(rotation_quaternion, gripper_bases[left_index])
+        left_gripper_poses.append(left_pose)
+        if graspnesses[left_index] < GRASPNESS_THRESHOLD:
+            left_graspnesses.append(1)
+        else:
+            left_graspnesses.append(0)
     else:
         left_original_handle.visible = False
-        left_transformed_handle.visible = False
+        left_gripper_poses.append(np.full(6, np.inf))
+        left_graspnesses.append(0)
     if right_index is not None:
         render_mesh(right_original_handle, meshes_3d[right_index], faces, hands_centroid)
-        render_mesh(right_transformed_handle, boring_meshes[right_index], faces, hands_centroid)
+        rotation_quaternion = generate_rotation_quaternion(gripper_directions[right_index], grasp_directions[right_index], initial_approach, initial_lateral)
+        right_pose = generate_xyzrpy(rotation_quaternion, gripper_bases[right_index])
+        right_gripper_poses.append(right_pose)
+        if graspnesses[right_index] < GRASPNESS_THRESHOLD:
+            right_graspnesses.append(1)
+        else:
+            right_graspnesses.append(0)
     else:
         right_original_handle.visible = False
-        right_transformed_handle.visible = False
+        right_gripper_poses.append(np.full(6, np.inf))
+        right_graspnesses.append(0)
+    
 
     render_grippers(gripper_frame_handles, gripper_urdf_handles, gripper_bases, gripper_directions, grasp_directions, graspnesses, hands_centroid)
 
@@ -393,6 +419,16 @@ for i in range(start_frame, end_frame):
     elapsed = time.time() - t0
     sleep_time = max(0.0, dt - elapsed)
     time.sleep(sleep_time)
+
+
+box_poses = np.array(box_poses)
+right_gripper_poses = np.array(right_gripper_poses)
+left_gripper_poses = np.array(left_gripper_poses)
+right_gripper_grasps = np.array(right_graspnesses)
+left_gripper_grasps = np.array(left_graspnesses)
+
+np.savez('demo_0_poses.npz', box_poses=box_poses, left_gripper_poses=left_gripper_poses, right_gripper_poses=right_gripper_poses, left_gripper_grasps=left_gripper_grasps, right_gripper_grasps=right_gripper_grasps)
+
 
 
 while True:

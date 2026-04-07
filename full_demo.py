@@ -22,6 +22,9 @@ URDF_PATH = "../gripper_model/robots/robotiq_arg85_description.URDF"
 initial_approach = np.array((0, 0, 1.0))
 initial_lateral = np.array((-1.0, 0, 0))
 
+color_prefix = '../board_captures/color_captures/20260404_122039/frame_'
+depth_prefix = '../board_captures/depth_captures/20260404_122039/frame_'
+
 
 #intrinsics
 fx, fy, cx, cy = 1366.3287, 1366.3287, 957.5452, 722.60974
@@ -31,6 +34,7 @@ fy *= 0.1333333333
 cx *= 0.1333333333
 cy *= 0.1333333333
 
+fx, fy, cx, cy = 597.01702881, 597.04272461, 327.60223389, 240.29771423
 
 def cam_crop_to_full(cam_bbox, box_center, box_size, img_size, focal_length=5000.):
     img_w, img_h = img_size[:, 0], img_size[:, 1]
@@ -62,7 +66,7 @@ def get_wilor_hands():
     
     print("everything loaded")
 
-    img_path = '../frames/frame_000410.png'
+    img_path = color_prefix + '000410.png'
     img_cv2 = cv2.imread(str(img_path))
 
     H, W, _ = img_cv2.shape
@@ -297,8 +301,8 @@ def gripperify_skeleton(skeletons_3d):
     return bases, gripper_directions
 
 def get_point_cloud(frame_no):
-    depth_img = Image.open('../depth_data/depth/'+frame_no+".png")
-    color_img = Image.open('../frames/frame_'+frame_no+".png")
+    depth_img = Image.open(depth_prefix+frame_no+".png")
+    color_img = Image.open(color_prefix+frame_no+".png")
 
     depth = np.asarray(depth_img) / 1000
     colors = np.asarray(color_img).reshape(-1, 3)
@@ -410,7 +414,7 @@ print(depth.shape)
 #exit()
 meshes_3d, meshes_2d, skeletons_2d, skeletons_3d, faces = get_wilor_hands()
 hands_centroid = get_hands_centroid(meshes_3d)
-#hands_centroid = None
+hands_centroid = None
 points, depth, colors = get_point_cloud(frame_no)
 skeletons_depthified = depthify_2d_hands(depth, skeletons_2d)
 meshes_depthified = depthify_2d_hands(depth, meshes_2d)

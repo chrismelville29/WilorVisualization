@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.spatial.transform import Rotation as R
 
 #needs unit quaternion
 def aa_to_quaternion(axis, angle):
@@ -52,3 +53,16 @@ def generate_rotation_quaternion(approach_goal, lateral_goal, approach_initial, 
     full_quaternion = multiply_quaternions(gripper_quaternion, grasp_quaternion)
 
     return full_quaternion
+
+
+
+
+def generate_xyzrpy(quaternion, position):
+
+    quat = np.array(quaternion)
+    quat_xyzw = np.roll(quat, -1)
+    rpy = R.from_quat(quat_xyzw).as_euler('xyz', degrees=False)
+
+    xyzrpy = np.concatenate([position, rpy])
+
+    return xyzrpy
