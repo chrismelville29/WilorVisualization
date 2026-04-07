@@ -37,6 +37,7 @@ def cloudify_frame(cloud_handle, axis_handle, box_handle, frame_no):
 
     depth_img = cv2.imread(depth_prefix + f'{frame_no}.png', cv2.IMREAD_UNCHANGED)
     color_img = cv2.imread(color_prefix + f'{frame_no}.png')
+    color_img = cv2.cvtColor(color_img, cv2.COLOR_BGR2RGB)
 
     _, rvec, tvec = reconstruct.detect_aruco_pose(color_img, intrinsic_matrix, None, 0.05)[0]
     quaternion, position = reconstruct.quatnpos_from_vector(tvec, rvec)
