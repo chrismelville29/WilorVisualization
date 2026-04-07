@@ -350,8 +350,6 @@ for i in range(start_frame, end_frame):
 
     frame_no = str(i).zfill(6)
 
-    print(i)
-
     wilor_data = np.load(npz_prefix + str(i).zfill(6) + '.npz')
     meshes_3d, meshes_2d, skeletons_2d, skeletons_3d, faces, handednesses = wilor_data['meshes_3d'], wilor_data['meshes_2d'], wilor_data['skeletons_2d'], wilor_data['skeletons_3d'], wilor_data['faces'], wilor_data['handednesses']
 

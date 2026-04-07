@@ -29,16 +29,10 @@ def matrix_from_intrix(fx, fy, cx, cy):
 
 
 def detect_aruco_pose(image_bgr, K, dist_coeffs, marker_length):
-    """
-    Detect ArUco markers and compute pose using solvePnP (OpenCV 4.7+).
-    """
 
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_RGB2GRAY)
 
-    # --- Dictionary ---
     aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_50)
-
-    # --- Detector ---
     params = cv2.aruco.DetectorParameters()
     detector = cv2.aruco.ArucoDetector(aruco_dict, params)
 
