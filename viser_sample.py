@@ -14,6 +14,9 @@ color_prefix = '../frames/frame_'
 depth_prefix = '../board_captures/depth_captures/20260404_122039/frame_'
 color_prefix = '../board_captures/color_captures/20260404_122039/frame_'
 
+depth_prefix = '../20260407_173846/depth_captures/frame_'
+color_prefix = '../20260407_173846/color_captures/frame_'
+
 # intrinsics
 fx, fy, cx, cy = 1366.3287, 1366.3287, 957.5452, 722.60974
 

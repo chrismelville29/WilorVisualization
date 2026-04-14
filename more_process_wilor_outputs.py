@@ -4,7 +4,7 @@ import time
 import cv2
 from scipy.spatial.transform import Rotation as R_scipy
 
-
+import rendering_utils
 from quaternion_utils import generate_rotation_quaternion
 from quaternion_utils import generate_xyzrpy
 import reconstruct
@@ -25,9 +25,12 @@ cy *= 0.1333333333
 fx, fy, cx, cy = 597.01702881, 597.04272461, 327.60223389, 240.29771423
 intrinsic_matrix = reconstruct.matrix_from_intrix(fx, fy, cx, cy)
 
-npz_prefix = '../chris_hands/frame_'
-depth_prefix = '../board_captures/depth_captures/20260404_122039/frame_'
-color_prefix = '../board_captures/color_captures/20260404_122039/frame_'
+timestamp = '20260407_173846'
+
+hands_npz_prefix = '../' + timestamp + '_hands/frame_'
+depth_prefix = '../' + timestamp + '/depth_captures/frame_'
+color_prefix = '../' + timestamp + '/color_captures/frame_'
+output_npz = '../' + timestamp + '_output.npz'
 
 DEPTHIMG_HEIGHT = 192
 DEPTHIMG_WIDTH = 256
@@ -60,6 +63,7 @@ def determine_hands(handednesses):
         print("no hands detected")
     elif len(handednesses) > 2:
         print("too many hands in frame")
+        print(len(handednesses))
     elif len(handednesses) == 2 and handednesses[0] == handednesses[1]:
         print("two of the same side hand")
     elif len(handednesses) == 1:
@@ -123,8 +127,7 @@ def quatify_grippers(gripper_directions, grasp_directions):
         quaternion = generate_rotation_quaternion(gripper_direction, grasp_direction, initial_approach, initial_lateral)
         quaternions.append(quaternion)
     return quaternions
-        
-
+    
     
 def gripperify_skeletons(skeletons_3d):
     bases = []
@@ -149,15 +152,19 @@ def gripperify_skeletons(skeletons_3d):
         thumbtip = skeleton_3d[4]
         fingertips = np.array((skeleton_3d[8], skeleton_3d[12], skeleton_3d[16], skeleton_3d[20]))
 
-        finger_graspnesses = np.linalg.norm(fingertips - thumbtip, axis=1)
+        finger_distances = np.linalg.norm(fingertips - thumbtip, axis=1)
 
-        min_graspness = np.min(finger_graspnesses)
+        min_distance = np.min(finger_distances)
+
+        graspness = 0
+        if min_distance < GRASPNESS_THRESHOLD:
+            graspness = 1
 
 
         bases.append(base)
         gripper_directions.append(gripper_direction)
         grasp_directions.append(grasp_direction)
-        graspnesses.append(min_graspness)
+        graspnesses.append(graspness)
 
     return bases, gripper_directions, grasp_directions, graspnesses
 
@@ -190,139 +197,23 @@ def get_hands_centroid(meshes):
     all_vertices = np.concatenate(meshes, axis=0)
     return np.mean(all_vertices, axis=0)
 
-def render_mesh(handle, mesh, faces, centroid=None):
-    rendering_mesh = mesh.copy()
-    if centroid is not None:
-        rendering_mesh -= centroid
-    handle.vertices = rendering_mesh
-    handle.faces = faces
-    handle.visible = True
-
-def render_meshes(handles, meshes, faces, centroid=None):
-    for i in range(len(meshes)):
-        render_mesh(handles[i], meshes[i], faces, centroid)
-
-def initialize_mesh(server, name, color):
-    handle = server.scene.add_mesh_simple(
-        name=name,
-        vertices=np.zeros((2, 3)),
-        faces=np.zeros((1, 3)),
-        color=color
-    )
-    handle.visible = False
-    return handle
-
-def render_grippers(frame_handles, urdf_handles, bases, quaternions, graspnesses, centroid=None):
-
-    for i in range(len(bases)):
-        frame_handle = frame_handles[i]
-        urdf_handle = urdf_handles[i]
-        base = bases[i]
-        quaternion = quaternions[i]
-        graspness = graspnesses[i]
-
-        rendering_position = base.copy()
-
-        if centroid is not None:
-            rendering_position -= centroid
-
-        #print(rendering_position)
-
-
-        frame_handle.position = rendering_position
-        frame_handle.wxyz = quaternion
-
-        #0.08 arbitrary threshold
-        if graspness < GRASPNESS_THRESHOLD:
-            urdf_handle.update_cfg(np.array([0.8])) #0.8 for closed.
-        else:
-            urdf_handle.update_cfg(np.array([0.1]))
-
-def initialize_gripper(server, name):
-    handle = server.scene.add_frame(
-        name=name,
-        show_axes=False,
-        position = np.zeros(3)
-    )
-
-    gripper = ViserUrdf(server, urdf, root_node_name=name)
-
-    return handle, gripper
-
-def render_box(axis_handle, box_handle, quaternion, position, centroid=None):
-    rendering_position = position.copy()
-    if centroid is not None:
-        rendering_position -= centroid
-
-    axis_handle.wxyz = quaternion
-    axis_handle.position = rendering_position
-
-    box_handle.wxyz = quaternion
-    box_handle.position = rendering_position
-
-    axis_handle.visible = True
-    box_handle.visible = True
-
-
-def render_clouds(handles, clouds, colors, centroid=None):
-    for i in range(len(clouds)):
-        render_cloud(handles[i], clouds[i], colors, centroid)
-
-def render_cloud(handle, points, colors, centroid=None):
-    rendering_points = points.copy()
-    if centroid is not None:
-        rendering_points -= centroid
-
-    handle.points = rendering_points
-    handle.colors = colors
-    handle.visible = True
-
-def initialize_cloud(server, name, point_size):
-    handle = server.scene.add_point_cloud(
-        name=name,
-        points=np.zeros((1, 3)),
-        colors=np.zeros((1, 3)),
-        point_size=point_size,
-    )
-    handle.visible = False
-    return handle
-
-def initialize_axes(server, name):
-    handle = server.scene.add_frame(
-        name=name,
-        wxyz=(1, 0, 0, 0),
-        position=np.array((0, 0, 0)),
-    )
-    handle.visible = False
-    return handle
-
-def initialize_box(server, name):
-    handle = server.scene.add_box(
-        name=name,
-        dimensions=(.304, .304, .004), 
-        color=(255, 0, 0),
-        position=np.zeros(3),   
-    )
-    handle.visible = False
-    return handle
-
 server = viser.ViserServer()
 
 
 #point cloud reconstructed from rgbd data
 
-point_cloud_handle = initialize_cloud(server, "point cloud", point_size=0.001)
+point_cloud_handle = rendering_utils.initialize_cloud(server, "point cloud", point_size=0.001)
 
-axes_handle = initialize_axes(server, "aruco pose")
+axes_handle = rendering_utils.initialize_axes(server, "aruco pose")
 
-box_handle = initialize_box(server, "cardboard sheet")
+box_handle = rendering_utils.initialize_box(server, "cardboard sheet")
 
-left_original_handle = initialize_mesh(server, "left hand original", COLOR_LEFT)
-right_original_handle = initialize_mesh(server, "right hand original", COLOR_RIGHT)
+left_original_handle = rendering_utils.initialize_mesh(server, "left hand original", COLOR_LEFT)
+right_original_handle = rendering_utils.initialize_mesh(server, "right hand original", COLOR_RIGHT)
 original_handles = [left_original_handle, right_original_handle]
 
-left_gripper_handle, left_urdf_handle = initialize_gripper(server, "/left gripper")
-right_gripper_handle, right_urdf_handle = initialize_gripper(server, "/right gripper")
+left_gripper_handle, left_urdf_handle = rendering_utils.initialize_gripper(server, "/left gripper", urdf)
+right_gripper_handle, right_urdf_handle = rendering_utils.initialize_gripper(server, "/right gripper", urdf)
 gripper_frame_handles = [left_gripper_handle, right_gripper_handle]
 gripper_urdf_handles = [left_urdf_handle, right_urdf_handle]
 
@@ -342,15 +233,15 @@ print("wahoo made it")
 fps = 200
 dt = 1.0 / fps
 
-start_frame = 400
-end_frame = 1100
+start_frame = 300
+end_frame = 1600
 
 for i in range(start_frame, end_frame):
     t0 = time.time()
 
     frame_no = str(i).zfill(6)
 
-    wilor_data = np.load(npz_prefix + str(i).zfill(6) + '.npz')
+    wilor_data = np.load(hands_npz_prefix + str(i).zfill(6) + '.npz')
     meshes_3d, meshes_2d, skeletons_2d, skeletons_3d, faces, handednesses = wilor_data['meshes_3d'], wilor_data['meshes_2d'], wilor_data['skeletons_2d'], wilor_data['skeletons_3d'], wilor_data['faces'], wilor_data['handednesses']
 
     points, depth, colors = get_point_cloud(i)
@@ -368,33 +259,31 @@ for i in range(start_frame, end_frame):
 
     left_index, right_index = determine_hands(handednesses)
 
-    render_cloud(point_cloud_handle, points, colors, hands_centroid)
+    rendering_utils.render_cloud(point_cloud_handle, points, colors, hands_centroid)
 
-    render_box(axes_handle, box_handle, box_quaternion, box_position, hands_centroid)
+    rendering_utils.render_box(axes_handle, box_handle, box_quaternion, box_position, hands_centroid)
     box_pose = generate_xyzrpy(box_quaternion, box_position)
     box_poses.append(box_pose)
 
     if left_index is not None:
-        render_mesh(left_original_handle, meshes_3d[left_index], faces, hands_centroid)
+        rendering_utils.render_mesh(left_original_handle, meshes_3d[left_index], faces, hands_centroid)
+        left_base, left_quat, left_graspness = gripper_bases[left_index], gripper_quaternions[left_index], graspnesses[left_index]
+        rendering_utils.render_gripper(left_gripper_handle, left_urdf_handle, left_base, left_quat, left_graspness)
         left_bases.append(gripper_bases[left_index])
         left_quats.append(gripper_quaternions[left_index])
-        if graspnesses[left_index] < GRASPNESS_THRESHOLD:
-            left_graspnesses.append(1)
-        else:
-            left_graspnesses.append(0)
+        left_graspnesses.append(graspnesses[left_index])
     else:
         left_original_handle.visible = False
         left_bases.append(np.full(3, np.inf))
         left_quats.append(np.full(4, np.inf))
         left_graspnesses.append(0)
     if right_index is not None:
-        render_mesh(right_original_handle, meshes_3d[right_index], faces, hands_centroid)
+        rendering_utils.render_mesh(right_original_handle, meshes_3d[right_index], faces, hands_centroid)
+        right_base, right_quat, right_graspness = gripper_bases[right_index], gripper_quaternions[right_index], graspnesses[right_index]
+        rendering_utils.render_gripper(right_gripper_handle, right_urdf_handle, right_base, right_quat, right_graspness)
         right_bases.append(gripper_bases[right_index])
         right_quats.append(gripper_quaternions[right_index])
-        if graspnesses[right_index] < GRASPNESS_THRESHOLD:
-            right_graspnesses.append(1)
-        else:
-            right_graspnesses.append(0)
+        right_graspnesses.append(graspnesses[right_index])
     else:
         right_original_handle.visible = False
         right_bases.append(np.full(3, np.inf))
@@ -402,7 +291,7 @@ for i in range(start_frame, end_frame):
         right_graspnesses.append(0)
     
 
-    render_grippers(gripper_frame_handles, gripper_urdf_handles, gripper_bases, gripper_quaternions, graspnesses, hands_centroid)
+    #render_grippers(gripper_frame_handles, gripper_urdf_handles, gripper_bases, gripper_quaternions, graspnesses, hands_centroid)
 
 
     elapsed = time.time() - t0
@@ -420,7 +309,7 @@ left_gripper_grasps = np.array(left_graspnesses)
 
 
 
-np.savez('demo_quaternion_poses.npz', box_poses=box_poses, left_bases=left_bases, right_bases=right_bases, left_quats=left_quats, right_quats=right_quats, right_gripper_grasps=right_gripper_grasps, left_gripper_grasps=left_gripper_grasps)
+np.savez(output_npz, box_poses=box_poses, left_bases=left_bases, right_bases=right_bases, left_quats=left_quats, right_quats=right_quats, right_gripper_grasps=right_gripper_grasps, left_gripper_grasps=left_gripper_grasps)
 
 
 

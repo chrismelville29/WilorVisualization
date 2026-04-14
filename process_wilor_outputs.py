@@ -2,6 +2,7 @@ import numpy as np
 from PIL import Image
 import time
 
+import rendering_utils
 from quaternion_utils import generate_rotation_quaternion
 from cluster_utils import *
 import viser
@@ -208,28 +209,6 @@ def get_hands_centroid(meshes):
     all_vertices = np.concatenate(meshes, axis=0)
     return np.mean(all_vertices, axis=0)
 
-def render_mesh(handle, mesh, faces, centroid=None):
-    rendering_mesh = mesh.copy()
-    if centroid is not None:
-        rendering_mesh -= centroid
-    handle.vertices = rendering_mesh
-    handle.faces = faces
-    handle.visible = True
-
-def render_meshes(handles, meshes, faces, centroid=None):
-    for i in range(len(meshes)):
-        render_mesh(handles[i], meshes[i], faces, centroid)
-
-def initialize_mesh(server, name, color):
-    handle = server.scene.add_mesh_simple(
-        name=name,
-        vertices=np.zeros((2, 3)),
-        faces=np.zeros((1, 3)),
-        color=color
-    )
-    handle.visible = False
-    return handle
-
 def render_grippers(frame_handles, urdf_handles, bases, gripper_directions, grasp_directions, graspnesses, centroid=None):
 
     for i in range(len(bases)):
@@ -257,68 +236,34 @@ def render_grippers(frame_handles, urdf_handles, bases, gripper_directions, gras
             urdf_handle.update_cfg(np.array([0.8])) #0.8 for closed.
         else:
             urdf_handle.update_cfg(np.array([0.1]))
-
-def initialize_gripper(server, name):
-    handle = server.scene.add_frame(
-        name=name,
-        show_axes=False,
-        position = np.zeros(3)
-    )
-
-    gripper = ViserUrdf(server, urdf, root_node_name=name)
-
-    return handle, gripper
-
-def render_clouds(handles, clouds, colors, centroid=None):
-    for i in range(len(clouds)):
-        render_cloud(handles[i], clouds[i], colors, centroid)
-
-def render_cloud(handle, points, colors, centroid=None):
-    rendering_points = points.copy()
-    if centroid is not None:
-        rendering_points -= centroid
-
-    handle.points = rendering_points
-    handle.colors = colors
-    handle.visible = True
-
-def initialize_cloud(server, name, point_size):
-    handle = server.scene.add_point_cloud(
-        name=name,
-        points=np.zeros((1, 3)),
-        colors=np.zeros((1, 3)),
-        point_size=point_size,
-    )
-    handle.visible = False
-    return handle
-
+            
 server = viser.ViserServer()
 
     
 
 #point cloud reconstructed from rgbd data
 
-point_cloud_handle = initialize_cloud(server, "point cloud", point_size=0.001)
+point_cloud_handle = rendering_utils.initialize_cloud(server, "point cloud", point_size=0.001)
 
 
-left_medians_handle = initialize_cloud(server, "left medians", point_size=0.01)
-right_medians_handle = initialize_cloud(server, "right medians", point_size=0.01)
+left_medians_handle = rendering_utils.initialize_cloud(server, "left medians", point_size=0.01)
+right_medians_handle = rendering_utils.initialize_cloud(server, "right medians", point_size=0.01)
 medians_handles = [left_medians_handle, right_medians_handle]
 
-left_corrected_handle = initialize_mesh(server, "left hand corrected", COLOR_CORRECTED)
-right_corrected_handle = initialize_mesh(server, "right hand corrected", COLOR_CORRECTED)
+left_corrected_handle = rendering_utils.initialize_mesh(server, "left hand corrected", COLOR_CORRECTED)
+right_corrected_handle = rendering_utils.initialize_mesh(server, "right hand corrected", COLOR_CORRECTED)
 corrected_handles = [left_corrected_handle, right_corrected_handle]
 
-left_transformed_handle = initialize_mesh(server, "left transformed mesh", COLOR_TRANSFORMED)
-right_transformed_handle = initialize_mesh(server, "right transformed mesh", COLOR_TRANSFORMED)
+left_transformed_handle = rendering_utils.initialize_mesh(server, "left transformed mesh", COLOR_TRANSFORMED)
+right_transformed_handle = rendering_utils.initialize_mesh(server, "right transformed mesh", COLOR_TRANSFORMED)
 transformed_handles = [left_transformed_handle, right_transformed_handle]
 
-left_original_handle = initialize_mesh(server, "left hand original", COLOR_LEFT)
-right_original_handle = initialize_mesh(server, "right hand original", COLOR_RIGHT)
+left_original_handle = rendering_utils.initialize_mesh(server, "left hand original", COLOR_LEFT)
+right_original_handle = rendering_utils.initialize_mesh(server, "right hand original", COLOR_RIGHT)
 original_handles = [left_original_handle, right_original_handle]
 
-left_gripper_handle, left_urdf_handle = initialize_gripper(server, "/left gripper")
-right_gripper_handle, right_urdf_handle = initialize_gripper(server, "/right gripper")
+left_gripper_handle, left_urdf_handle = rendering_utils.initialize_gripper(server, "/left gripper", urdf)
+right_gripper_handle, right_urdf_handle = rendering_utils.initialize_gripper(server, "/right gripper", urdf)
 gripper_frame_handles = [left_gripper_handle, right_gripper_handle]
 gripper_urdf_handles = [left_urdf_handle, right_urdf_handle]
 
@@ -368,21 +313,21 @@ for i in range(start_frame, end_frame):
 
     left_index, right_index = determine_hands(handednesses)
 
-    render_cloud(point_cloud_handle, points, colors, hands_centroid)
+    rendering_utils.render_cloud(point_cloud_handle, points, colors, hands_centroid)
 
-    #render_clouds(medians_handles, median_point_sets, COLOR_3D, hands_centroid)
+    #rendering_utils.render_clouds(medians_handles, median_point_sets, COLOR_3D, hands_centroid)
 
-    #render_meshes(corrected_handles, corrected_meshes, faces, hands_centroid)
+    #rendering_utils.render_meshes(corrected_handles, corrected_meshes, faces, hands_centroid)
 
     if left_index is not None:
-        render_mesh(left_original_handle, meshes_3d[left_index], faces, hands_centroid)
-        render_mesh(left_transformed_handle, boring_meshes[left_index], faces, hands_centroid)
+        rendering_utils.render_mesh(left_original_handle, meshes_3d[left_index], faces, hands_centroid)
+        rendering_utils.render_mesh(left_transformed_handle, boring_meshes[left_index], faces, hands_centroid)
     else:
         left_original_handle.visible = False
         left_transformed_handle.visible = False
     if right_index is not None:
-        render_mesh(right_original_handle, meshes_3d[right_index], faces, hands_centroid)
-        render_mesh(right_transformed_handle, boring_meshes[right_index], faces, hands_centroid)
+        rendering_utils.render_mesh(right_original_handle, meshes_3d[right_index], faces, hands_centroid)
+        rendering_utils.render_mesh(right_transformed_handle, boring_meshes[right_index], faces, hands_centroid)
     else:
         right_original_handle.visible = False
         right_transformed_handle.visible = False
