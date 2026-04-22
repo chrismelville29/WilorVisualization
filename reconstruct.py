@@ -2,6 +2,11 @@ import cv2
 import numpy as np
 from scipy.spatial.transform import Rotation as R_scipy
 
+BIG_TAG = cv2.aruco.DICT_6X6_50
+LIL_TAG = cv2.aruco.DICT_4X4_50
+
+ACTIVE_TAG = LIL_TAG
+
 def make_matrix_from_tvec_and_rvec(tvec, rvec):
     """
     Create a 4x4 matrix from a list of translation vectors and a list of rotation vectors.
@@ -32,13 +37,16 @@ def detect_aruco_pose(image_bgr, K, dist_coeffs, marker_length):
 
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_RGB2GRAY)
 
-    aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_50)
+    aruco_dict = cv2.aruco.getPredefinedDictionary(ACTIVE_TAG)
     params = cv2.aruco.DetectorParameters()
     detector = cv2.aruco.ArucoDetector(aruco_dict, params)
 
     corners, ids, _ = detector.detectMarkers(gray)
 
     poses = []
+    tag_ids = []
+    rvecs = []
+    tvecs = []
 
     if ids is not None:
         cv2.aruco.drawDetectedMarkers(image_bgr, corners, ids)
@@ -68,6 +76,9 @@ def detect_aruco_pose(image_bgr, K, dist_coeffs, marker_length):
                 continue
 
             poses.append((int(ids[i][0]), rvec, tvec))
+            tag_ids.append(int(ids[i][0]))
+            rvecs.append(rvec)
+            tvecs.append(tvec)
 
             '''# --- Draw axes ---
             cv2.drawFrameAxes(
@@ -80,8 +91,7 @@ def detect_aruco_pose(image_bgr, K, dist_coeffs, marker_length):
             )
             '''
 
-
-    return poses
+    return np.array(tag_ids), np.array(rvecs), np.array(tvecs)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ import cv2
 from scipy.spatial.transform import Rotation as R_scipy
 
 import rendering_utils
+import box_utils
 from quaternion_utils import generate_rotation_quaternion
 from quaternion_utils import generate_xyzrpy
 import reconstruct
@@ -25,7 +26,7 @@ cy *= 0.1333333333
 fx, fy, cx, cy = 597.01702881, 597.04272461, 327.60223389, 240.29771423
 intrinsic_matrix = reconstruct.matrix_from_intrix(fx, fy, cx, cy)
 
-timestamp = '20260407_173846'
+timestamp = '20260421_131353'
 
 hands_npz_prefix = '../' + timestamp + '_hands/frame_'
 depth_prefix = '../' + timestamp + '/depth_captures/frame_'
@@ -62,8 +63,7 @@ def determine_hands(handednesses):
     if len(handednesses) == 0:
         print("no hands detected")
     elif len(handednesses) > 2:
-        print("too many hands in frame")
-        print(len(handednesses))
+        print(f"too many hands in frame: {len(handednesses)}")
     elif len(handednesses) == 2 and handednesses[0] == handednesses[1]:
         print("two of the same side hand")
     elif len(handednesses) == 1:
@@ -223,18 +223,19 @@ right_bases = []
 right_quats = []
 left_graspnesses = []
 right_graspnesses = []
-box_poses = []
+box_bases = []
+box_quats = []
 
 
 hands_centroid = np.array((0.03,0.07,0.45))
-hands_centroid = None
+#hands_centroid = None
 
 print("wahoo made it")
-fps = 200
+fps = 10
 dt = 1.0 / fps
 
-start_frame = 300
-end_frame = 1600
+start_frame = 200
+end_frame = 1300
 
 for i in range(start_frame, end_frame):
     t0 = time.time()
@@ -248,8 +249,11 @@ for i in range(start_frame, end_frame):
 
     color_img = cv2.imread(color_prefix + frame_no + '.png')
     
-    _, rvec, tvec = reconstruct.detect_aruco_pose(color_img, intrinsic_matrix, None, 0.05)[0]
-    box_quaternion, box_position = reconstruct.quatnpos_from_vector(tvec, rvec)
+    aruco_poses = reconstruct.detect_aruco_pose(color_img, intrinsic_matrix, None, 0.05)
+
+    box_quaternion, box_position = box_utils.condense_aruco_poses(aruco_poses)
+
+
 
     #original hands -> gripper
     gripper_bases, gripper_directions, grasp_directions, graspnesses = gripperify_skeletons(skeletons_3d)
@@ -262,13 +266,13 @@ for i in range(start_frame, end_frame):
     rendering_utils.render_cloud(point_cloud_handle, points, colors, hands_centroid)
 
     rendering_utils.render_box(axes_handle, box_handle, box_quaternion, box_position, hands_centroid)
-    box_pose = generate_xyzrpy(box_quaternion, box_position)
-    box_poses.append(box_pose)
+    box_bases.append(box_position)
+    box_quats.append(box_quaternion)
 
     if left_index is not None:
         rendering_utils.render_mesh(left_original_handle, meshes_3d[left_index], faces, hands_centroid)
         left_base, left_quat, left_graspness = gripper_bases[left_index], gripper_quaternions[left_index], graspnesses[left_index]
-        rendering_utils.render_gripper(left_gripper_handle, left_urdf_handle, left_base, left_quat, left_graspness)
+        rendering_utils.render_gripper(left_gripper_handle, left_urdf_handle, left_base, left_quat, left_graspness, hands_centroid)
         left_bases.append(gripper_bases[left_index])
         left_quats.append(gripper_quaternions[left_index])
         left_graspnesses.append(graspnesses[left_index])
@@ -280,7 +284,7 @@ for i in range(start_frame, end_frame):
     if right_index is not None:
         rendering_utils.render_mesh(right_original_handle, meshes_3d[right_index], faces, hands_centroid)
         right_base, right_quat, right_graspness = gripper_bases[right_index], gripper_quaternions[right_index], graspnesses[right_index]
-        rendering_utils.render_gripper(right_gripper_handle, right_urdf_handle, right_base, right_quat, right_graspness)
+        rendering_utils.render_gripper(right_gripper_handle, right_urdf_handle, right_base, right_quat, right_graspness, hands_centroid)
         right_bases.append(gripper_bases[right_index])
         right_quats.append(gripper_quaternions[right_index])
         right_graspnesses.append(graspnesses[right_index])
@@ -299,7 +303,8 @@ for i in range(start_frame, end_frame):
     time.sleep(sleep_time)
 
 
-box_poses = np.array(box_poses)
+box_bases = np.array(box_bases)
+box_quats = np.array(box_quats)
 left_bases = np.array(left_bases)
 right_bases = np.array(right_bases)
 right_quats = np.array(right_quats)
@@ -309,7 +314,7 @@ left_gripper_grasps = np.array(left_graspnesses)
 
 
 
-np.savez(output_npz, box_poses=box_poses, left_bases=left_bases, right_bases=right_bases, left_quats=left_quats, right_quats=right_quats, right_gripper_grasps=right_gripper_grasps, left_gripper_grasps=left_gripper_grasps)
+np.savez(output_npz, box_bases=box_bases, box_quats=box_quats, left_bases=left_bases, right_bases=right_bases, left_quats=left_quats, right_quats=right_quats, right_gripper_grasps=right_gripper_grasps, left_gripper_grasps=left_gripper_grasps)
 
 
 

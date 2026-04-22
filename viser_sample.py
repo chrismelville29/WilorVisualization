@@ -14,8 +14,8 @@ color_prefix = '../frames/frame_'
 depth_prefix = '../board_captures/depth_captures/20260404_122039/frame_'
 color_prefix = '../board_captures/color_captures/20260404_122039/frame_'
 
-depth_prefix = '../20260407_173846/depth_captures/frame_'
-color_prefix = '../20260407_173846/color_captures/frame_'
+depth_prefix = '../20260421_131353/depth_captures/frame_'
+color_prefix = '../20260421_131353/color_captures/frame_'
 
 # intrinsics
 fx, fy, cx, cy = 1366.3287, 1366.3287, 957.5452, 722.60974
@@ -36,14 +36,23 @@ intrinsic_matrix[1, 1] = fy
 intrinsic_matrix[0, 2] = cx
 intrinsic_matrix[1, 2] = cy
 
+def condense_aruco_poses(aruco_poses):
+    ids, rvecs, tvecs = aruco_poses
+    agg_rvec = np.mean(rvecs, axis=0)
+    agg_tvec = np.mean(tvecs, axis=0)
+    quaternion, position = reconstruct.quatnpos_from_vector(agg_tvec, agg_rvec)
+
+    return quaternion, position
+
 def cloudify_frame(cloud_handle, axis_handle, box_handle, frame_no):
 
     depth_img = cv2.imread(depth_prefix + f'{frame_no}.png', cv2.IMREAD_UNCHANGED)
     color_img = cv2.imread(color_prefix + f'{frame_no}.png')
     color_img = cv2.cvtColor(color_img, cv2.COLOR_BGR2RGB)
 
-    _, rvec, tvec = reconstruct.detect_aruco_pose(color_img, intrinsic_matrix, None, 0.05)[0]
-    quaternion, position = reconstruct.quatnpos_from_vector(tvec, rvec)
+    aruco_poses = reconstruct.detect_aruco_pose(color_img, intrinsic_matrix, None, 0.05)
+
+    quaternion, position = condense_aruco_poses(aruco_poses)
 
     axis_handle.wxyz = quaternion
     axis_handle.position = position
